@@ -184,4 +184,39 @@ Dexter will automatically buy the token when owner of the captured mint is in th
 Profit range is median success rate of the owner, currently adjusted to be 40% of it.
 After price change is bigger than current step, we sell the token.
 
-Transactions on 3MB/s home network take around 1-2 seconds, where on industrial grade network like Azure's, it's as fast as 0.2-1s for the transaction to be made and confirmed.
+Transactions on 3MB/s home network take around 1-2 seconds, where on industrial grade network like Azure's, it's as fast as 0.2-1s for the transaction to confirm.
+
+# Usage
+
+`Dexter.py` and `wsLogs.py` are independent processes.
+
+Launch `Dexter.py` to analyze current database data, convert that into a leaderboard list, and snipe new tokens.
+
+Launch `wsLogs.py` to collect entries for later sniping.
+
+```
+  $ python wsLogs.py
+  $ python Dexter.py
+```
+
+# License 
+
+Copyright (c) 2025 FLOCK4H
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
