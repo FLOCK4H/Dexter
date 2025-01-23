@@ -13,11 +13,10 @@
 # Overview
 
 What was used to make it all work?
-1. Helius websockets -> [helius.dev](https://www.helius.dev)
-2. Quicknode's Jupiter Metis Swap API -> [quicknode.com](https://www.quicknode.com)
-3. Asynchronous programming
-4. Solders, and Solana libraries
-5. A lot of hard work
+- Helius websockets -> [helius.dev](https://www.helius.dev)
+- Quicknode's Jupiter Metis Swap API -> [quicknode.com](https://www.quicknode.com)
+- Asynchronous programming
+- Solders, and Solana libraries
 
 # Setup
 
