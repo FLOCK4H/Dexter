@@ -14,7 +14,6 @@
 
 What was used to make it all work?
 - Helius websockets -> [helius.dev](https://www.helius.dev)
-- Quicknode's Jupiter Metis Swap API -> [quicknode.com](https://www.quicknode.com)
 - Asynchronous programming
 - Solders, and Solana libraries
 
@@ -101,7 +100,7 @@ The `market.py` and `Dexter.py` files both access the database.
 
 For the `Dexter` to be able to gather data and trade tokens, we need to provide it with the APIs in `common_.py` file located in `DexLab` folder.
 
-In our case, we used `Helius shared RPC` along with `Quicknode's Jupiter Metis Swap API`
+In our case, we used `Helius shared RPC`
 
 ```
 # common_.py
@@ -110,7 +109,6 @@ gWS_URL = f"" # e.g. helius
 WS_URL = f"" # e.g. helius
 RPC_URL = f"" # e.g. helius
 STAKED_API = "" # e.g. helius
-SWAP_URL = "" # e.g. quicknode
 ```
 
 Then we simply modify `.config` file to include our `API_KEY`, `PRIV_KEY`, and `WALLET`.
