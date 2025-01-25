@@ -4,11 +4,11 @@
 
 # Features
 
-1. Manual transaction building -> No API, just ultra-fast optimized transactions.
-2. Database that keeps tracking new, stagnant or migrated tokens.
-3. Algorithm for choosing which creators to buy from.
-4. Trading algorithm that incrementally handles current profit step - Buy / Sell.
-5. Fully async and concurrent operation
+1. Manual transaction building -> **No API, just ultra-fast and optimized transactions.**
+2. Database that keeps track of new, and stagnant or migrated tokens.
+3. Algorithm for generating a **leaderboard for Pump.fun creators**.
+4. Trading algorithm that incrementally handles current profit step: Buy / Sell.
+5. Fully async and concurrent operation.
 
 # Overview
 
