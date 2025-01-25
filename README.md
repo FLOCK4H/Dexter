@@ -16,6 +16,10 @@
 
 **Thanks 💙**
 
+**Telegram group: [FLOCK4H.CAVE](https://t.me/flock4hcave)**
+
+**Discord server: [Discord](https://discord.gg/thREUECv2a)**
+
 # Overview
 
 What was used to make it all work?
