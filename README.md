@@ -10,6 +10,12 @@
 4. Trading algorithm that incrementally handles current profit step: Buy / Sell.
 5. Fully async and concurrent operation.
 
+**If this comes useful and you feel like supporting here is my SOL wallet address:**
+
+`3oFDwxVtZEpSGeNgdWRiJtNiArv4k9FiMsMz3yjudgeS`
+
+**Thanks 💙**
+
 # Overview
 
 What was used to make it all work?
