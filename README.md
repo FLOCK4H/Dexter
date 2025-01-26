@@ -1,6 +1,9 @@
 # Dexter
 
-**Fast and advanced Solana Pump.fun Sniper Bot** that analyzes previously recorded token data, calculates Pump.fun creators score basing on multiple factors, and buys popular creators new tokens in under a second.  
+**Fast and advanced Solana Pump.fun Sniper Bot** that analyzes previously recorded token data, calculates Pump.fun creators score basing on multiple factors, and buys popular creators new tokens in under a second.
+
+> [!IMPORTANT]
+> This project is FREE, this is not a `SCAM`, you are in full control of the software, I'm just the author - I develop stuff.
 
 # Features
 
