@@ -3,7 +3,8 @@
 **Fast and advanced Solana Pump.fun Sniper Bot** that analyzes previously recorded token data, calculates Pump.fun creators score basing on multiple factors, and buys popular creators new tokens in under a second.
 
 > [!IMPORTANT]
-> This project is FREE, this is not a `SCAM`, you are in full control of the software, I'm just the author - I develop stuff.
+> This project is `FREE`, this is not a `SCAM`, you are in full control of the software, I'm just the author - I develop stuff.
+> There is no reliance on external APIs, you can choose to use Solana's public endpoint if that's what you want.
 
 # Features
 
