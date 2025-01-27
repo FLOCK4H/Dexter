@@ -1,5 +1,6 @@
 import logging
 try:
+    from settings import *
     from .colors import *
 except ImportError:
     from colors import *
@@ -18,7 +19,7 @@ LOG_DIR = 'dev/logs'
 os.makedirs(LOG_DIR, exist_ok=True)
 
 logging.basicConfig(
-    format=f'{cc.LIGHT_CYAN}[DexAI] %(levelname)s - %(message)s{cc.RESET}',
+    format=f'{cc.LIGHT_CYAN}[DexAI] %(levelname)s | %(message)s{cc.RESET}',
     level=logging.INFO,
     handlers=[
         logging.FileHandler(os.path.join(LOG_DIR, 'dexter.log')),
@@ -111,7 +112,7 @@ class Analyzer:
     def _is_successful_mint(self, token_info):
         """
         Determine if a mint is successful based on criteria:
-        0. Sniping price = Price closest to 1 second after the first transaction.
+        0. Sniping price = Price closest to X second after the first transaction.
         1. Highest price at least 150% of sniping price.
         2. The highest price was reached after at least 25 swaps.
         """
@@ -128,7 +129,7 @@ class Analyzer:
 
         # 0: Calculate the sniping price
         first_timestamp = float(timestamps[0])
-        target_timestamp = first_timestamp + 1  # 1 second after the first transaction
+        target_timestamp = first_timestamp + SNIPING_PRICE_TIME  # 1 second after the first transaction
 
         # Find the closest timestamp to the target
         closest_index = min(range(len(timestamps)), key=lambda i: abs(float(timestamps[i]) - target_timestamp))
@@ -136,7 +137,7 @@ class Analyzer:
 
         # 1: Check if highest price is at least 150% of the sniping price
         peak_price = Decimal(str(token_info["high_price"]))
-        if peak_price < sniping_price * Decimal("2.5"):
+        if peak_price < sniping_price * Decimal(f"{SNIPE_PRICE_TO_PEAK_PRICE_RATIO}"):
             return False, 0
 
         # 2: Ensure the highest price was reached after at least 100 swaps
@@ -145,7 +146,7 @@ class Analyzer:
         except StopIteration:
             return False, 0
 
-        if peak_index < 100:
+        if peak_index < HIGHEST_PRICE_MIN_SWAPS:
             return False, 0
 
         # Calculate the profit ratio based on sniping price
@@ -236,8 +237,6 @@ class Analyzer:
                 "total_swaps": total_swaps,
             })
 
-        logging.info("Incremental analysis complete.")
-        
     def process_results_sync(self, show_result=True):
         return self.process_results(show_result=show_result)
 
@@ -251,8 +250,6 @@ class Analyzer:
             if not data_chunk:
                 break
 
-            logging.info(f"Processing chunk starting at offset {offset}...")
-
             self.analyze_top_creators_sync(data_chunk)
 
             del data_chunk
@@ -263,10 +260,9 @@ class Analyzer:
         logging.info("All data processed. Market analysis completed.")
 
     def process_results(self, show_result=True):
-        logging.info(f"\n{cc.YELLOW}Top Creators (with trust-factor, success ratio, and medians):{cc.RESET}")
         leaderboard = {}
 
-        logging.info(f"Top creators: {len(self.top_creators)}")
+        logging.info(f"Creators in the database: {len(self.top_creators)}")
 
         for creator, data in self.top_creators.items():
             
@@ -277,7 +273,10 @@ class Analyzer:
             total_swaps = data['total_swaps']
 
             # Here is the main condition to set, this makes the algorithm choose best creators, tweak it to your liking
-            if (mint_count >= 2 and median_peak_mc >= 7500 and total_swaps >= 5) or (mint_count >= 1 and median_peak_mc >= 7000 and total_swaps >= 5): #1
+            if (
+                (mint_count >= 2 and median_peak_mc >= MEDIAN_PEAK_MC_ABOVE_2_MINTS and total_swaps >= TOTAL_SWAPS_ABOVE_2_MINTS) or # Owner has more than 2 mints, median peak market cap is at least 7500$, and total swaps are at least 5
+                (mint_count >= 1 and median_peak_mc >= MEDIAN_PEAK_MC_1_MINT and total_swaps >= TOTAL_SWAPS_1_MINT) # Owner has 1 mint, median peak market cap is at least 7000$, and total swaps are at least 5
+            ): 
                 success_count = 0
                 unsuccess_count = 0
                 success_ratios = []
@@ -294,8 +293,8 @@ class Analyzer:
                 total_mints = success_count + unsuccess_count
                 trust_factor = success_count / total_mints
 
-                #2 If trust_factor < 0.75, consider creator unsuccessful => exclude
-                if total_mints == 0 or trust_factor < 0.65:
+                #2 If trust_factor < X, consider creator unsuccessful => exclude
+                if total_mints == 0 or trust_factor < TRUST_FACTOR_RATIO:
                     continue
 
                 avg_success_ratio = (sum(success_ratios) / success_count) if success_count > 0 else 0.0
@@ -311,7 +310,7 @@ class Analyzer:
                 if (unsuccess_count > 0):
                     too_close = any(delay < 900 for delay in data['creation_delays'])
                     if too_close:
-                        logging.info(f"{cc.RED}Creator {creator} identified as a faker. Excluding from leaderboard.{cc.RESET}")
+                        logging.info(f"{cc.YELLOW}Creator {creator} should not be trusted. Excluding from leaderboard.{cc.RESET}")
                         continue
 
                 leaderboard[creator] = {

@@ -11,21 +11,25 @@ import base58
 from borsh_construct import CStruct, U64
 from decimal import Decimal
 import logging
-import asyncio, json
+import asyncio, json, sys
 from solders.compute_budget import set_compute_unit_price
 from aiohttp import ClientSession
 import time, requests
 
 try:
+    from colors import *
+    from DexLab.common_ import *
+except ImportError:
     from .colors import *
     from .common_ import *
-    from .utils import usd_to_lamports, lamports_to_tokens, usd_to_microlamports
-except ImportError:
-    from colors import *
-    from common_ import *
-    from utils import usd_to_lamports, lamports_to_tokens, usd_to_microlamports
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    format=f'{cc.LIGHT_CYAN}[Dexter] %(levelname)s - %(message)s{cc.RESET}',
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
 BUY_INSTRUCTION_SCHEMA = CStruct(
     "amount" / U64,
@@ -46,7 +50,7 @@ def get_solana_price_usd():
         response = requests.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd')
         data = response.json()
         price = data['solana']['usd']
-        print(f"{cc.YELLOW}Solana price: {price}")
+        print(f"{cc.LIGHT_GREEN}Solana price: {price}")
         return str(price)
     except Exception:
         logging.info(f"{cc.RED}Failed to get Solana price from Coingecko{cc.RESET}")
@@ -191,6 +195,7 @@ class PumpSwap:
             token_amount: int = 0,
             sim: bool = False,
             priority_micro_lamports: int = 0,
+            slippage: float = 1.3 # MAX: 1.99
         ):
 
         transaction = Transaction()
@@ -206,7 +211,6 @@ class PumpSwap:
                     priority_micro_lamports
                 )
             )
-            logging.info(f"Added priority fee instructions with {priority_micro_lamports} micro-lamports per CU.")
 
         # ---------------------------------------------------------------------
         # 2) Check if associated token account exists. If not, create it.
@@ -226,7 +230,7 @@ class PumpSwap:
             fee_recipient,
             token_amount,
             # slippage, 1.99x
-            int(sol_amount * 1.52)
+            int(sol_amount * slippage)
         )
         transaction.add(buy_ix)
 
@@ -257,8 +261,10 @@ class PumpSwap:
             
             opts = TxOpts(skip_preflight=True, max_retries=0, skip_confirmation=True)
             result = await self.async_client.send_raw_transaction(bytes(signed_txn), opts=opts)
-            logging.info(f"Transaction result: {result}")
-            return result
+            result_json = result.to_json()
+            transaction_id = json.loads(result_json).get('result')
+            logging.info(f"Transaction result: {transaction_id}")
+            return transaction_id
         except Exception as e:
             logging.error(f"Transaction failed: {e}")
             raise
@@ -322,8 +328,10 @@ class PumpSwap:
 
             opts = TxOpts(skip_preflight=True, max_retries=0, skip_confirmation=True)
             result = await self.async_client.send_raw_transaction(bytes(signed_txn), opts=opts)
-            logging.info(f"Sell transaction result: {result}")
-            return result
+            result_json = result.to_json()
+            transaction_id = json.loads(result_json).get('result')
+            logging.info(f"Transaction result: {transaction_id}")
+            return transaction_id
         except Exception as e:
             logging.error(f"Transaction failed: {e}")
             raise

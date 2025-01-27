@@ -1,26 +1,29 @@
 import asyncpg
 from decimal import Decimal
 try:
-    from .common_ import *
-    from .colors import *
-except ImportError:
     from common_ import *
     from colors import *
+except ImportError:
+    from .common_ import *
+    from .colors import *
 import logging, time
 import asyncio, json, requests, subprocess
 import os
 import platform, shlex, traceback
 from collections import defaultdict
 
+# Change this to your pg_dump path
+PG_DUMP_PATH = r"C:\Program Files\PostgreSQL\17\bin\pg_dump.exe" 
+
 def get_pg_dump_path():
     """Return the correct pg_dump path based on the platform."""
     if platform.system() == "Windows":
-        return r"C:\Program Files\PostgreSQL\17\bin\pg_dump.exe"
+        return PG_DUMP_PATH
     else:
         return "pg_dump"
 
 logging.basicConfig(
-    format=f'{cc.GREEN}[DexLab] %(levelname)s - %(message)s{cc.RESET}',
+    format=f'{cc.LIGHT_BLUE}[DexLab] %(levelname)s | %(message)s{cc.RESET}',
     level=logging.INFO,
     handlers=[
         logging.StreamHandler()
@@ -55,7 +58,7 @@ class Market:
 
     async def init_db(self):
         self.db_pool = await asyncpg.create_pool(self.db_dsn, min_size=1, max_size=5000, timeout=60)
-        logging.info("Database connection pool initialized.")
+        logging.info(f"{cc.WHITE}{cc.BRIGHT}Database connection pool initialized. Dexter is starting...{cc.RESET}")
         async with self.db_pool.acquire() as conn:
             tables = await conn.fetch(
                 "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='public';"
@@ -260,7 +263,7 @@ class Market:
 
                     if self.count_iter % 100 == 0:
                         self.count_iter = 0
-                        logging.info(f"Slot delay: {round(time.time() - data['timestamp'], 2)}s")
+                        logging.info(f"{cc.CYAN}Slot delay: {round(time.time() - data['timestamp'], 2)}s{cc.RESET}")
 
                     high_price = float(row['high_price'])
                     low_price = float(row['low_price'])

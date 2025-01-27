@@ -1,6 +1,4 @@
-import base64
-
-def read_config(file_path=".config"):
+def read_config(file_path="config\\.config"):
     config_data = {}
     try:
         with open(file_path, "r") as config_file:
@@ -12,7 +10,8 @@ def read_config(file_path=".config"):
                 key, value = line.split("=", 1)
                 config_data[key.strip()] = value.strip()
     except Exception as e:
-        raise RuntimeError(f"Failed to read config file: {e}")
+        print(f"Failed to read config file: {e}")
+        return None
     return config_data
 
 def get_wallet(config_data):

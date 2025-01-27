@@ -16,12 +16,14 @@ from DexLab.pump_swap import PumpSwap
 from DexLab.swaps import SolanaSwaps
 from DexLab.utils import lamports_to_tokens, usd_to_lamports, usd_to_microlamports
 from aiohttp import ClientSession
+from settings import *
 
 sys.stdout.reconfigure(encoding='utf-8')
 
 DB_DSN = "postgres://dexter_user:admin123@127.0.0.1/dexter_db"
 
 LOG_DIR = 'dev/logs'
+
 os.makedirs(LOG_DIR, exist_ok=True)
 
 logging.basicConfig(
@@ -33,19 +35,28 @@ logging.basicConfig(
     ]
 )
 
-# Algorithm parameters
-PRICE_TREND_WEIGHT = Decimal('0.4')
-TX_MOMENTUM_WEIGHT = Decimal('0.6')
-
-# Session algorithm parameters
-INCREMENT_THRESHOLD = Decimal('25')
-DECREMENT_THRESHOLD = Decimal('20')
-
 ROLLING_WINDOW_SIZE = 5
 SINGLE_LOCK = True
 
 BLACKLIST = []
 DEX_DIR = os.path.abspath(os.path.dirname(__file__))
+
+def dex_welcome():
+    sys.stdout.write(f"""
+{cc.CYAN}▓█████▄ ▓█████ ▒██   ██▒▄▄▄█████▓▓█████  ██▀███  
+{cc.CYAN}▒██▀ ██▌▓█   ▀ ▒▒ █ █ ▒░▓  ██▒ ▓▒▓█   ▀ ▓██ ▒ ██▒
+{cc.CYAN}░██   █▌▒███   ░░  █   ░▒ ▓██░ ▒░▒███   ▓██ ░▄█ ▒
+{cc.CYAN}░▓█▄   ▌▒▓█  ▄  ░ █ █ ▒ ░ ▓██▓ ░ ▒▓█  ▄ ▒██▀▀█▄  
+{cc.CYAN}░▒████▓ ░▒████▒▒██▒ ▒██▒  ▒██▒ ░ ░▒████▒░██▓ ▒██▒
+{cc.CYAN} ▒▒▓  ▒ ░░ ▒░ ░▒▒ ░ ░▓ ░  ▒ ░░   ░░ ▒░ ░░ ▒▓ ░▒▓░
+{cc.CYAN} ░ ▒  ▒  ░ ░  ░░░   ░▒ ░    ░     ░ ░  ░  ░▒ ░ ▒░
+{cc.CYAN} ░ ░  ░    ░    ░    ░    ░         ░     ░░   ░ 
+{cc.CYAN}   ░       ░  ░ ░    ░              ░  ░   ░     
+{cc.CYAN} ░  
+{cc.CYAN}          𝗕𝘆 𝗙𝗟𝗢𝗖𝗞𝟰𝗛                       𝘃𝟭.𝟮{cc.RESET}
+
+{cc.RESET}""")
+    sys.stdout.flush()
 
 class Dexter:
     def __init__(self, db_dsn):
@@ -107,7 +118,7 @@ class Dexter:
 
     async def process_data(self, type, sig, data):
         """
-        This method does concurrency control & the sub-second timestamp logic for each swap.
+            This method does concurrency control & the sub-second timestamp logic for each swap.
         """
         mint = data.get('mint', None)
         if not mint:
@@ -128,12 +139,12 @@ class Dexter:
 
                 if self.counter == 0:
                     self.counter = 1
-                    logging.info(f"Sample: {mint}, owner: {owner}, created: {time.strftime('%H:%M:%S')}")
+                    logging.info(f"{cc.LIGHT_GRAY}Sample: {mint}, owner: {owner}, created: {time.strftime('%H:%M:%S')}{cc.RESET}")
 
                 if OIL:
                     logging.info(
                         f"Processed Mint: {mint}, owner: {owner}, created: {time.strftime('%H:%M:%S')}, "
-                        f"{f'{cc.GREEN}Match' if OIL else f'{cc.RED}No match'}{cc.RESET}"
+                        f"{cc.GREEN}Match{cc.RESET}"
                     )
 
                 # If it's an owner in the leaderboard, set up a session
@@ -280,7 +291,7 @@ class Dexter:
                         response = json.loads(await ws.recv())
 
                         if 'result' in response:
-                            logging.info("Subscribed to logs successfully!")
+                            logging.info("Dexter successfully connected to Solana's Network ✔")
 
                         async for message in ws:
                             if self.stop_event.is_set():
@@ -327,6 +338,10 @@ class Dexter:
         return self.analyzer.total_supply * price_in_usd
 
     def _compute_composite_score(self, rolling_buffer):
+        """
+            Compute the composite score for a token based on
+            price trend and transaction momentum.
+        """
         if len(rolling_buffer) < 2:
             return 0
         t0, price0, swaps0 = rolling_buffer[0]
@@ -381,7 +396,7 @@ class Dexter:
                 return
             
             # Here change buy price
-            amount = 2 if trust_level == 1 else 4 # 2USD or 4USD
+            amount = AMOUNT_BUY_TL_1 if trust_level == 1 else AMOUNT_BUY_TL_2
             lamports = await usd_to_lamports(amount, self.analyzer.sol_price_usd)
             if self.wallet_balance <= lamports:
                 self.holdings.pop(mint_id, None)
@@ -391,7 +406,8 @@ class Dexter:
             price = await self.get_latest_price(mint_id)
             token_amount = await lamports_to_tokens(lamports, price)
             # 0.1USD fee, 50k compute units
-            fee = usd_to_microlamports(0.1, self.analyzer.sol_price_usd, 50_000) if trust_level == 1 else usd_to_microlamports(0.1, self.analyzer.sol_price_usd, 50_000)
+            fee = usd_to_microlamports(BUY_FEE, self.analyzer.sol_price_usd, 50_000) if trust_level == 1 else usd_to_microlamports(BUY_FEE, self.analyzer.sol_price_usd, 50_000)
+            slippage = SLIPPAGE # 30%
 
             tx_id = await self.pump_swap.pump_buy(
                 mint_id, 
@@ -400,7 +416,7 @@ class Dexter:
                 token_amount,
                 False, 
                 fee,
-                trust_level
+                slippage
             )
             if self.time_start != 0:
                 logging.info(f"Full time taken to buy: {time.time() - self.time_start}s")
@@ -421,7 +437,7 @@ class Dexter:
 
     async def sell(self, mint_id, amount, reason, owner, trust_level, buy_price):
         try:
-            logging.info(f"{cc.LIGHT_MAGENTA} Initiating sell for {mint_id}.")
+            logging.info(f"{cc.LIGHT_MAGENTA}Initiating sell for {mint_id}.")
 
             bonding_curve = self.swap_folder.get(mint_id, {})["bonding_curve"]
             if not bonding_curve:
@@ -429,7 +445,7 @@ class Dexter:
                 self.holdings.pop(mint_id, None)
                 return
             
-            fee = usd_to_microlamports(0.1, self.analyzer.sol_price_usd, 50_000) if trust_level == 1 else usd_to_microlamports(0.1, self.analyzer.sol_price_usd, 50_000)
+            fee = usd_to_microlamports(SELL_FEE, self.analyzer.sol_price_usd, 50_000) if trust_level == 1 else usd_to_microlamports(SELL_FEE, self.analyzer.sol_price_usd, 50_000)
             
             if mint_id in self.holdings:
                 tx_id_sell = await self.pump_swap.pump_sell(
@@ -440,30 +456,42 @@ class Dexter:
                     False, 
                     fee
                 )
-                result_json = tx_id_sell.to_json()
-                transaction_id = json.loads(result_json).get('result')
-                results = await self.swaps.get_swap_tx(transaction_id, mint_id, tx_type="sell")
+                results = await self.swaps.get_swap_tx(tx_id_sell, mint_id, max_retries=6, tx_type="sell")
 
                 if results == "InstructionError":
                     # We have to sell, let's wait and try again
+                    await asyncio.sleep(0.02)
                     return await self.sell(mint_id, amount, reason, owner, trust_level)
                 
                 sol_balance = results.get("balance", 0)
                 price = results.get("price", Decimal(0))
+
                 peak_change = await self._process_peak_change(buy_price, price)
                 logging.info(f"{cc.LIGHT_MAGENTA} Sold {amount} of {mint_id} with profit {peak_change}.")
 
                 old_balance = self.wallet_balance
-                self.wallet_balance = sol_balance
+                if sol_balance != 0:
+                    self.wallet_balance = sol_balance
                 logging.info(f"Wallet difference: {old_balance} -> {self.wallet_balance} = {self.wallet_balance - old_balance}")
                 self.holdings.pop(mint_id, None)
                 await self.save_result({"mint_id": mint_id, "owner": owner, "profit": peak_change, "reason": reason})
                 await self._validate_result(owner, reason)
+
+                if sol_balance == 0 or price == 0:
+                    logging.info(f"{cc.BLINK}{cc.RED}Sell failed for {mint_id}, increase your priority fee or check if you have sufficient balance.{cc.RESET}")
+                    return
+
         except Exception as e:
             logging.error(f"Sell transaction failed: {e}")
             traceback.print_exc()
 
     async def set_trust_level(self, creator):
+        """
+            Trust level is determined by the creator's mint count and median peak market cap.
+            If creator has only 1 mint, trust level is 1.
+            If creator has median peak market cap >= 50k, trust level is 2.
+            If creator has median peak market cap >= 0, trust level is 1.
+        """
         trust_level = 0
         if creator["mint_count"] == 1:
             trust_level = 1
@@ -477,7 +505,7 @@ class Dexter:
         logging.info(f"{cc.BLUE}Session started for {mint_id} (owner: {owner}). Monitoring...{cc.RESET}")
 
         if owner in BLACKLIST or (SINGLE_LOCK and len(self.holdings) > 0) or self.updating:
-            logging.info(f"{cc.RED}Owner {owner} is blacklisted, a single lock is enabled, or leaderboard is updating rn. Skipping session.{cc.RESET}")
+            logging.info(f"{cc.YELLOW}Owner {owner} is blacklisted, a single lock is enabled, or leaderboard is updating rn. Skipping session.{cc.RESET}")
             self.swap_folder.pop(mint_id, None)
             return
 
@@ -488,9 +516,9 @@ class Dexter:
         profit_range = Decimal(str(round(creator["median_success_ratio"], 2)))
 
         # increments in multiples of 10
-        max_target = profit_range * Decimal('0.4') # We keep only 40% of the profit range, safety
-        increments = [Decimal('10')]
-        step_unit = Decimal('10')
+        max_target = profit_range * PROFIT_MARGIN
+        increments = [PRICE_STEP_UNITS]
+        step_unit = PRICE_STEP_UNITS
         val = increments[0] + step_unit
         while val <= max_target:
             increments.append(val)
@@ -538,13 +566,11 @@ class Dexter:
                         if result == "PriceTooHigh":
                             logging.info(f"{cc.RED}Ending session for {mint_id} due to high buy price.{cc.RESET}")
                             break
-                        result_json = result.to_json()
-                        buy_tx_id = json.loads(result_json).get('result')
+                        buy_tx_id = result
                         continue  # Jump straight to next iteration so we fetch our tx
 
                     if not skip_if_done:
                         we = holders.get(self.wallet, {})
-                        logging.info(f"We: {we}")
                         balance = we.get("balance", 0)
                         balance_changes = we.get("balance_changes", [])
                         if balance_changes:
@@ -570,7 +596,7 @@ class Dexter:
                                 break
                         if token_balance <= 0 or selfBuyPrice <= 0:
                             buy_retry += 1
-                            logging.info(f"{cc.RED}No balance or couldn't get buy price for {mint_id}, retry {buy_retry}.{cc.RESET}")
+                            logging.info(f"{cc.YELLOW}No balance or couldn't get buy price for {mint_id}, retry {buy_retry}.{cc.RESET}")
                             await asyncio.sleep(0.5)
                             continue
 
@@ -607,7 +633,7 @@ class Dexter:
                     else:
                         condition_level = "safe"
 
-                    # Adjust increments so they don't blow up if open->buy was huge
+                    # Adjusted increments so they don't blow up if open->buy was huge
                     open_to_buy_diff = Decimal('0')
                     if open_price > 0 and selfBuyPrice > open_price:
                         open_to_buy_diff = Decimal(
@@ -675,9 +701,9 @@ class Dexter:
 
                     # Sell if selfPeakChange >= to_sell or malicious or drop_time
                     if (Decimal(str(selfPeakChange)) >= to_sell) or malicious or drop_time:
-                        logging.info(f"Debug: {increments}, {can_increment}, {current_target_step}, {to_sell}, Malicious: {malicious}, Drop-Time: {drop_time}")
+                        logging.info(f"""{cc.LIGHT_GREEN}Selling {mint_id} at {str(selfPeakChange)}, is malicious: {malicious}, is drop-time: {drop_time}.{cc.RESET}""")
                         await self.sell(mint_id, token_balance, condition_level, owner, trust_level, selfBuyPrice)
-                        logging.info(f"Token has been sold, stopping the session.")
+                        logging.info(f"{cc.LIGHT_GRAY}Token has been sold, stopping the session.{cc.RESET}")
                         break
 
                     changed_price = (last_price is None or price != last_price)
@@ -703,6 +729,10 @@ class Dexter:
                         )
 
                     # Stagnant checks
+                    """
+                        If price hasn't changed in 30 minutes, sell.
+                        If price is < 3e-8 and time since last change > 13s, sell.
+                    """
                     if time_since_last_change > 1800:
                         logging.info(f"{cc.YELLOW}{mint_id} stagnant(no price change>30m). Stop.{cc.RESET}")
                         await self.sell(mint_id, token_balance, "stagnant", owner, trust_level, selfBuyPrice)
@@ -724,6 +754,7 @@ class Dexter:
 
         self.active_sessions.pop(mint_id, None)
         self.swap_folder.pop(mint_id, None)
+        self.holdings.pop(mint_id, None)
         logging.info(f"{cc.BLUE}Session ended {mint_id}.{cc.RESET}")
 
     async def update_leaderboard(self):
@@ -737,12 +768,12 @@ class Dexter:
                 
                 await self.load_blacklist()
                 
-                logging.info("Starting leaderboard update...")
+                logging.info(f"{cc.WHITE}Starting leaderboard update...{cc.RESET}")
                 await self.analyzer.analyze_market()
                 self.leaderboard = await asyncio.to_thread(self.analyzer.process_results_sync, False)
 
-                logging.info("Leaderboard updated successfully.")
-                logging.info(f"Total Creators: {len(self.leaderboard)}")
+                logging.info(f"{cc.WHITE}Leaderboard updated successfully.{cc.RESET}")
+                logging.info(f"{cc.LIGHT_RED}Leaderboard Creators: {len(self.leaderboard)}{cc.RESET}")
 
                 # Sort the leaderboard by performance score
                 sorted_leaderboard = sorted(
@@ -751,15 +782,17 @@ class Dexter:
                     reverse=True
                 )
 
-                logging.info("Top 10 Leaderboard Entries:")
+                logging.info(f"{cc.LIGHT_CYAN}Top 10 Leaderboard Entries:{cc.RESET}")
                 for rank, (creator, entry) in enumerate(sorted_leaderboard[:10], start=1):
                     logging.info(
+                        f"{cc.MAGENTA}"
                         f"Rank {rank}: Creator: {creator}, "
                         f"Performance Score: {entry['performance_score']:.2f}, "
                         f"Trust Factor: {entry['trust_factor']:.2f}, "
                         f"Total Mints: {entry['mint_count']}, "
                         f"Total Swaps: {entry['total_swaps']}, "
                         f"Median Market Cap: {entry['median_peak_market_cap']:.2f} USD"
+                        f"{cc.RESET}"
                     )
 
                 # Save the sorted leaderboard to a file
@@ -776,6 +809,7 @@ class Dexter:
             await asyncio.sleep(30 * 60)
 
     async def run(self):
+        dex_welcome()
         self.dexLogs = DexBetterLogs(WS_URL)
         await self.init_db_pool()
 

@@ -8,18 +8,19 @@ import os, sys, time
 import signal
 
 try:
-    from .serializers import *
-    from .common_ import *
-    from .colors import *
-    from .market import Market
-except ImportError:
     from serializers import *
     from common_ import *
     from colors import *
     from market import Market
+except ImportError:
+    from .common_ import *
+    from .market import Market
+    from .colors import *
+    from .serializers import *
+
 
 logging.basicConfig(
-    format=f'{cc.GREEN}[DexLab] %(levelname)s - %(message)s{cc.RESET}',
+    format=f'{cc.LIGHT_BLUE}[DexLab] %(levelname)s | %(message)s{cc.RESET}',
     level=logging.INFO,
     handlers=[
         logging.StreamHandler()
@@ -67,7 +68,7 @@ class DexBetterLogs:
                     response = json.loads(await ws.recv())
 
                     if 'result' in response:
-                        logging.info("Subscribed to logs successfully!")
+                        logging.info(f"{cc.LIGHT_GRAY}Subscribed to logs successfully!{cc.RESET}")
 
                     async for message in ws:
                         if self.stop_event.is_set():
@@ -156,7 +157,7 @@ class DexBetterLogs:
         for log in log_list:
             if "InitializeMint" in log:
                 if debug:
-                    logging.info(f"{cc.GREEN}New mint found! {sig} {cc.RESET}")
+                    logging.info(f"{cc.LIGHT_MAGENTA}New mint found! {sig} {cc.RESET}")
                 is_mint = True
             elif "Program data" in log:
                 idx = log.find("Program data: ")
