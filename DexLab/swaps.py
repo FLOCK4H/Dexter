@@ -15,9 +15,11 @@ from decimal import Decimal
 try:
     from DexLab.common_ import *
     from colors import *
+    from serializers import *
 except ImportError:
     from .common_ import *
     from .colors import *
+    from .serializers import *
 
 LOG_DIR = 'dev/logs'
 
@@ -40,6 +42,7 @@ class SolanaSwaps:
         self.session = aiohttp.ClientSession()  # Persistent session
         self.async_client = AsyncClient(endpoint=self.rpc_endpoint)
         self.dexter = parent
+        self.serializer = Interpreters()
 
     async def fetch_wallet_balance_sol(self):
         headers = {"Content-Type": "application/json"}
