@@ -24,7 +24,7 @@
 
 ![image](https://github.com/user-attachments/assets/97245720-25d4-464d-a579-5341d4cb8362)
 
-**If this comes useful and you feel like supporting here is my SOL wallet address:**
+**If this comes useful airdrop some Solana:**
 
 `3oFDwxVtZEpSGeNgdWRiJtNiArv4k9FiMsMz3yjudgeS`
 
