@@ -53,7 +53,7 @@ def dex_welcome():
 {cc.CYAN} ░ ░  ░    ░    ░    ░    ░         ░     ░░   ░ 
 {cc.CYAN}   ░       ░  ░ ░    ░              ░  ░   ░     
 {cc.CYAN} ░  
-{cc.CYAN}          𝗕𝘆 𝗙𝗟𝗢𝗖𝗞𝟰𝗛                       𝘃𝟭.𝟮{cc.RESET}
+{cc.CYAN}          𝗕𝘆 𝗙𝗟𝗢𝗖𝗞𝟰𝗛                       𝘃𝟭.3{cc.RESET}
 
 {cc.RESET}""")
     sys.stdout.flush()
