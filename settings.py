@@ -43,7 +43,7 @@ AMOUNT_BUY_TL_2 = 15 # 10 USD for creators with Trust Level 2
 AMOUNT_BUY_TL_1 = 10 # 10 USD for creators with Trust Level 1
 BUY_FEE = 0.15 # 0.1 USD
 SELL_FEE = 0.15 # 0.1 USD
-SLIPPAGE = 1.90 # 90%, 30% is safer
+SLIPPAGE_AMOUNT = 1.90 # 90%, 30% is safer
 PRICE_STEP_UNITS = 40 # 40% price step
 
 # If you want to just swap on pump.fun until the bonding curve is reached:
@@ -66,8 +66,15 @@ TX_MOMENTUM_WEIGHT = Decimal('0.6')
 # Example: If current step is 40% and composite score is above 25, bot will increase step to 80%
 # !default values are 25 and 20
 INCREMENT_THRESHOLD = Decimal('25')
+INCREMENT_COOLDOWN = 15.0 # Do not increment step for X seconds after incrementing the first time, or we may never sell until max profit range is reached.
 
 # Example: If current step is 80% but there are more sells than buys, bot will sell
 # !default value is 20
 # This is a heuristic, rarely being triggered
 DECREMENT_THRESHOLD = Decimal('20')
+
+# Sell if there was no buy in the last X seconds
+DROP_TIME = 30
+
+# If a token is under 0.0000000300 price for X seconds, it is considered stagnant and malicious
+STAGNANT_UNDER_PRICE = 13 

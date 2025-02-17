@@ -255,6 +255,17 @@ class Dexter:
         except Exception as e:
             logging.error(f"Error loading blacklist: {e}")
 
+    async def add_to_blacklist(self, owner):
+        try:
+            BLACKLIST.append(owner)
+            os.makedirs(self.dex_dir, exist_ok=True)
+            blacklist_path = os.path.join(self.dex_dir, "blacklist.txt")
+            with open(blacklist_path, "a", encoding="utf-8") as f:
+                f.write(f"{owner}\n")
+            logging.info(f"{cc.LIGHT_BLUE}Added {owner} to blacklist.{cc.RESET}")
+        except Exception as e:
+            logging.error(f"Error adding to blacklist: {e}")
+
     async def save_result(self, result):
         try:
             os.makedirs("dev", exist_ok=True)
@@ -365,7 +376,7 @@ class Dexter:
 
     async def _validate_result(self, owner, result):
         if result in ["malicious", "sell>buy"]:
-            BLACKLIST.append(owner)
+            await self.add_to_blacklist(owner)
             logging.info(f"{cc.RED}Blacklisted {owner} for {result}.{cc.RESET}")
         elif result in ["safe", "stagnant", "drop-time"]:
             logging.info(f"{cc.GREEN}Safe {owner} for {result}.{cc.RESET}")
@@ -407,7 +418,7 @@ class Dexter:
             token_amount = await lamports_to_tokens(lamports, price)
             # 0.1USD fee, 50k compute units
             fee = usd_to_microlamports(BUY_FEE, self.analyzer.sol_price_usd, 50_000) if trust_level == 1 else usd_to_microlamports(BUY_FEE, self.analyzer.sol_price_usd, 50_000)
-            slippage = SLIPPAGE # 30%
+            slippage = SLIPPAGE_AMOUNT # 30%
 
             tx_id = await self.pump_swap.pump_buy(
                 mint_id, 
@@ -461,7 +472,7 @@ class Dexter:
                 if results == "InstructionError":
                     # We have to sell, let's wait and try again
                     await asyncio.sleep(0.02)
-                    return await self.sell(mint_id, amount, reason, owner, trust_level)
+                    return await self.sell(mint_id, amount, reason, owner, trust_level, buy_price)
                 
                 sol_balance = results.get("balance", 0)
                 price = results.get("price", Decimal(0))
@@ -621,14 +632,14 @@ class Dexter:
                         last_buys_timestamp = datetime.datetime.now(datetime.timezone.utc)
                         
                     time_since_last_buy = (current_time - last_buys_timestamp).total_seconds()
-                    drop_time = (time_since_last_buy >= 20)
+                    is_drop_time = (time_since_last_buy >= DROP_TIME)
 
                     # Condition priority
                     if sells > buys:
                         condition_level = "sells>buys"
                     if malicious:
                         condition_level = "malicious"
-                    elif drop_time:
+                    elif is_drop_time:
                         condition_level = "drop-time"
                     else:
                         condition_level = "safe"
@@ -654,7 +665,7 @@ class Dexter:
                                 if current_target_step < 0:
                                     current_target_step = 0
                             elif not new_increments:
-                                increments = [Decimal('10')]
+                                increments = [PRICE_STEP_UNITS]
                                 current_target_step = 0
                         skip_if_done = True
 
@@ -685,7 +696,7 @@ class Dexter:
                                         can_increment = True
                                     else:
                                         time_since_increment = (current_time - last_increment_time).total_seconds()
-                                        if time_since_increment > 15.0: # increment_cooldown
+                                        if time_since_increment > INCREMENT_COOLDOWN: # increment_cooldown
                                             can_increment = True
 
                         if can_increment:
@@ -700,8 +711,8 @@ class Dexter:
                     to_sell = increments[current_target_step]
 
                     # Sell if selfPeakChange >= to_sell or malicious or drop_time
-                    if (Decimal(str(selfPeakChange)) >= to_sell) or malicious or drop_time:
-                        logging.info(f"""{cc.LIGHT_GREEN}Selling {mint_id} at {str(selfPeakChange)}, is malicious: {malicious}, is drop-time: {drop_time}.{cc.RESET}""")
+                    if (Decimal(str(selfPeakChange)) >= to_sell) or malicious or is_drop_time:
+                        logging.info(f"""{cc.LIGHT_GREEN}Selling {mint_id} at {str(selfPeakChange)}, is malicious: {malicious}, is drop-time: {is_drop_time}.{cc.RESET}""")
                         await self.sell(mint_id, token_balance, condition_level, owner, trust_level, selfBuyPrice)
                         logging.info(f"{cc.LIGHT_GRAY}Token has been sold, stopping the session.{cc.RESET}")
                         break
@@ -738,7 +749,7 @@ class Dexter:
                         await self.sell(mint_id, token_balance, "stagnant", owner, trust_level, selfBuyPrice)
                         break
 
-                    if price < Decimal('0.0000000300') and time_since_last_change > 13:
+                    if price < Decimal('0.0000000300') and time_since_last_change > STAGNANT_UNDER_PRICE: # Stagnant and low price
                         logging.info(f"{cc.YELLOW}{mint_id} stagnant(price<3e-8 & tx>13s). Stop.{cc.RESET}")
                         await self.sell(mint_id, token_balance, "malicious", owner, trust_level, selfBuyPrice)
                         break
