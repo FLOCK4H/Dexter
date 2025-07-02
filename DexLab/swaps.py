@@ -4,8 +4,8 @@ import base58
 import base64
 import json
 from typing import Optional
-from solders.keypair import Keypair # lint: ignore
-from solders.transaction import VersionedTransaction # lint: ignore
+from solders.keypair import Keypair # type: ignore
+from solders.transaction import VersionedTransaction # type: ignore
 from solders import message
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.types import TxOpts
@@ -48,7 +48,7 @@ class SolanaSwaps:
         headers = {"Content-Type": "application/json"}
         payload = {"jsonrpc": "2.0", "id": 1, "method": "getBalance",
             "params": [
-                f"{WALLET}",
+                f"{self.private_key.pubkey()}",
             ]
         }
         async with self.session.post(RPC_URL, json=payload, headers=headers) as resp:
@@ -61,7 +61,7 @@ class SolanaSwaps:
             else:
                 raise Exception(f"HTTP {resp.status}: {await resp.text()}")
 
-    async def close_session(self):
+    async def close(self):
         await self.session.close()
 
     async def fetch_json(self, url: str) -> dict:
@@ -95,19 +95,6 @@ class SolanaSwaps:
             raise
 
     async def get_swap_tx(self, tx_id: str, mint_token: str, tx_type: str = "buy", max_retries: int = 4, retry_interval: float = 0.2) -> Optional[str]:
-        """
-        Fetches the transaction details for a given transaction ID with retry mechanism.
-
-        Args:
-            tx_id (str): The transaction signature.
-            mint_token (str): The mint address of the token.
-            tx_type (str): Type of transaction ("buy" or "sell").
-            max_retries (int): Maximum number of retries if the result is None.
-            retry_interval (float): Time to wait between retries in seconds.
-
-        Returns:
-            Optional[str]: The token balance if successful, else None.
-        """
         attempt = 0
         backoff = retry_interval
         while attempt < max_retries:

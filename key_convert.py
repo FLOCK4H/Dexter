@@ -1,7 +1,7 @@
 import json
 import base58  # Install this library with: pip install base58
 from pathlib import Path
-from solders.keypair import Keypair  # Install this library with: pip install solders
+from solders.keypair import Keypair  # type: ignore Install this library with: pip install solders
 
 # Define the path to the keypair.json file
 keypair_json_path = Path("./keypair.json")

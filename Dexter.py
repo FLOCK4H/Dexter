@@ -2,23 +2,33 @@ import asyncio
 import logging
 import os
 import sys
-from DexLab.colors import cc
-from DexAI.trust_factor import Analyzer
-from DexLab.common_ import *
+try: from DexLab.colors import cc
+except: from .DexLab.colors import cc
+try: from DexAI.trust_factor import Analyzer
+except: from .DexAI.trust_factor import Analyzer
+try: from DexLab.common_ import *
+except: from .DexLab.common_ import *
 import asyncpg, collections
 import datetime, time
 from decimal import Decimal
 import json, traceback, base58
-from solders.keypair import Keypair  # lint: ignore
+from solders.keypair import Keypair  # type: ignore
 import websockets
-from DexLab.wsLogs import DexBetterLogs
-from DexLab.pump_swap import PumpSwap
-from DexLab.swaps import SolanaSwaps
-from DexLab.utils import lamports_to_tokens, usd_to_lamports, usd_to_microlamports
+try: from DexLab.wsLogs import DexBetterLogs
+except: from .DexLab.wsLogs import DexBetterLogs
+try: from DexLab.pump_fun import PumpFun
+except: from .DexLab.pump_fun import PumpFun
+try: from DexLab.swaps import SolanaSwaps
+except: from .DexLab.swaps import SolanaSwaps
+try: from DexLab.utils import lamports_to_tokens, usd_to_lamports, usd_to_microlamports
+except: from .DexLab.utils import lamports_to_tokens, usd_to_lamports, usd_to_microlamports
 from aiohttp import ClientSession
 from settings import *
+from solana.rpc.async_api import AsyncClient
+from dotenv import load_dotenv
+from pathlib import Path
 
-sys.stdout.reconfigure(encoding='utf-8')
+load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
 
 DB_DSN = "postgres://dexter_user:admin123@127.0.0.1/dexter_db"
 
@@ -26,11 +36,17 @@ LOG_DIR = 'dev/logs'
 
 os.makedirs(LOG_DIR, exist_ok=True)
 
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
+sys.stdout.reconfigure(encoding='utf-8')
+
 logging.basicConfig(
-    format=f'{cc.LIGHT_CYAN}[Dexter] %(levelname)s - %(message)s{cc.RESET}',
+    format=f'%(asctime)s - {cc.LIGHT_CYAN}Dexter ⚡ | %(message)s{cc.RESET}',
+    datefmt='%H:%M:%S',
     level=logging.INFO,
     handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, 'dexter.log')),
+        logging.FileHandler(os.path.join(LOG_DIR, 'dexter.log'), encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -53,7 +69,7 @@ def dex_welcome():
 {cc.CYAN} ░ ░  ░    ░    ░    ░    ░         ░     ░░   ░ 
 {cc.CYAN}   ░       ░  ░ ░    ░              ░  ░   ░     
 {cc.CYAN} ░  
-{cc.CYAN}          𝗕𝘆 𝗙𝗟𝗢𝗖𝗞𝟰𝗛                       𝘃𝟭.3{cc.RESET}
+{cc.CYAN}          𝗕𝘆 𝗙𝗟𝗢𝗖𝗞𝟰𝗛               𝘃2.0{cc.RESET}
 
 {cc.RESET}""")
     sys.stdout.flush()
@@ -67,8 +83,9 @@ class Dexter:
         self.leaderboard = None
         self.active_sessions = {}
         self.holdings = {}
+        self.privkey = Keypair.from_bytes(base58.b58decode(PRIV_KEY))
         self.wallet_balance = 0
-        self.wallet = str(WALLET)
+        self.wallet = str(self.privkey.pubkey())
         self.dex_dir = DEX_DIR
         self.logs = asyncio.Queue()
         self.stop_event = asyncio.Event()
@@ -210,7 +227,7 @@ class Dexter:
                         "tx_counts": {"swaps": 1, "buys": 1 if is_buy else 0, "sells": 0 if is_buy else 1},
                         "created": int(time.time()) - int(timestamp)
                     }
-                    logging.info(f"Slot delay: {round(time.time() - data['timestamp'], 2)}s")
+                    logging.info(f"Socket Latency: {round(time.time() - data['timestamp'], 2)}s")
                 else:
                     st = self.swap_folder[mint]["state"]
                     # Update state
@@ -418,17 +435,23 @@ class Dexter:
             token_amount = await lamports_to_tokens(lamports, price)
             # 0.1USD fee, 50k compute units
             fee = usd_to_microlamports(BUY_FEE, self.analyzer.sol_price_usd, 50_000) if trust_level == 1 else usd_to_microlamports(BUY_FEE, self.analyzer.sol_price_usd, 50_000)
-            slippage = SLIPPAGE_AMOUNT # 30%
+            slippage = SLIPPAGE_AMOUNT # type: ignore
 
             tx_id = await self.pump_swap.pump_buy(
                 mint_id, 
                 bonding_curve,
                 lamports,
+                owner,
                 token_amount,
                 False, 
                 fee,
                 slippage
             )
+            if tx_id == "migrated":
+                logging.info(f"{cc.RED}Bonding curve migrated for {mint_id}. Ending session.{cc.RESET}")
+                self.holdings.pop(mint_id, None)
+                return "migrated"
+            
             if self.time_start != 0:
                 logging.info(f"Full time taken to buy: {time.time() - self.time_start}s")
 
@@ -464,9 +487,15 @@ class Dexter:
                     bonding_curve,
                     amount,
                     0,
+                    owner,
                     False, 
                     fee
                 )
+                if tx_id_sell == "migrated":
+                    logging.info(f"{cc.RED}Bonding curve migrated for {mint_id} to PumpSwapAMM. Ending session.{cc.RESET}")
+                    self.holdings.pop(mint_id, None)
+                    return "migrated"
+
                 results = await self.swaps.get_swap_tx(tx_id_sell, mint_id, max_retries=6, tx_type="sell")
 
                 if results == "InstructionError":
@@ -478,7 +507,7 @@ class Dexter:
                 price = results.get("price", Decimal(0))
 
                 peak_change = await self._process_peak_change(buy_price, price)
-                logging.info(f"{cc.LIGHT_MAGENTA} Sold {amount} of {mint_id} with profit {peak_change}.")
+                logging.info(f"{cc.LIGHT_MAGENTA}Sold {amount} of {mint_id} with profit {peak_change:.6f}")
 
                 old_balance = self.wallet_balance
                 if sol_balance != 0:
@@ -817,50 +846,68 @@ class Dexter:
                 logging.error(f"Error updating leaderboard: {e}")
                 traceback.print_exc()
             self.updating = False
-            await asyncio.sleep(30 * 60)
+            await asyncio.sleep(LEADERBOARD_UPDATE_INTERVAL * 60) # type: ignore
 
     async def run(self):
-        dex_welcome()
-        self.dexLogs = DexBetterLogs(WS_URL)
-        await self.init_db_pool()
-
-        session = ClientSession()
-
-        keypair = PRIV_KEY
-
-        self.pump_swap = PumpSwap(
-            session,
-            keypair, 
-            rpc_endpoint=STAKED_API, # Preferably staked rpc
-            parent=self
-        )
-
-        self.swaps = SolanaSwaps(
-            self,
-            private_key=Keypair.from_bytes(base58.b58decode(get_private_key(config))), 
-            wallet_address=WALLET,
-            rpc_endpoint=STAKED_API, # Preferably staked rpc
-            api_key=API_KEY
-        )
-
-        self.wallet_balance = await self.swaps.fetch_wallet_balance_sol()
-        logging.info(f"{cc.CYAN}{cc.BRIGHT}Initialized wallet {WALLET} with: {self.wallet_balance} SOL")
-
         try:
+            dex_welcome()
+            self.dexLogs = DexBetterLogs(WS_URL)
+            await self.init_db_pool()
+
+            self.session = ClientSession()
+            self.async_client = AsyncClient(STAKED_API)
+
+            keypair = PRIV_KEY
+
+            self.pump_swap = PumpFun(
+                self.session,
+                keypair, 
+                async_client=self.async_client, # Preferably staked rpc
+            )
+
+            self.swaps = SolanaSwaps(
+                self,
+                private_key=self.privkey, 
+                wallet_address=self.wallet,
+                rpc_endpoint=STAKED_API, # Preferably staked rpc
+                api_key=API_KEY
+            )
+
+            self.wallet_balance = await self.swaps.fetch_wallet_balance_sol()
+            logging.info(f"{cc.CYAN}{cc.BRIGHT}Initialized wallet {self.wallet} with: {self.wallet_balance} SOL")
+
             await asyncio.gather(
                 self.subscribe(),
                 self.handle_market(),
                 self.update_leaderboard()
             )
+        except asyncio.CancelledError:
+            await self.close()
+        except KeyboardInterrupt:
+            await self.close()
         finally:
             for mint_id, task in self.active_sessions.items():
                 task.cancel()
+
+    async def close(self):
+        try:
+            logging.info(f"{cc.CYAN}Closing Dexter...{cc.RESET}")
+            await self.pump_swap.close()
             await self.close_db_pool()
+            await self.swaps.close()
+            await self.swaps.async_client.close()
+            await self.dexLogs.session.close()
             self.stop_event.set()
+            await asyncio.sleep(1)
+        except Exception as e:
+            logging.error(f"Error closing Dexter: {e}")
+            traceback.print_exc()
+
+def run():
+    dexter = Dexter(DB_DSN)
+    asyncio.run(dexter.run())
 
 if __name__ == '__main__':
     dexter = Dexter(DB_DSN)
-    try:
-        asyncio.run(dexter.run())
-    except KeyboardInterrupt:
-        logging.info("Shutting down gracefully.")
+    asyncio.run(dexter.run())
+

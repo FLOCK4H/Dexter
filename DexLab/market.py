@@ -263,7 +263,7 @@ class Market:
 
                     if self.count_iter % 100 == 0:
                         self.count_iter = 0
-                        logging.info(f"{cc.CYAN}Slot delay: {round(time.time() - data['timestamp'], 2)}s{cc.RESET}")
+                        logging.info(f"{cc.CYAN}Socket Latency: {round(time.time() - data['timestamp'], 2)}s{cc.RESET}")
 
                     high_price = float(row['high_price'])
                     low_price = float(row['low_price'])

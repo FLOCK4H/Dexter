@@ -211,7 +211,7 @@ WS_URL = f"wss://mainnet.helius-rpc.com/?api-key={API_KEY}" # e.g. helius
 RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={API_KEY}" # e.g. helius
 ```
 
-Then simply modify `.config` file to include `API_KEY`, `PRIVATE_KEY` - base58 (e.g. phantom private key) format, and `WALLET`.
+Then simply modify `.config` file to include `API_KEY`, `PRIVATE_KEY` - base58 (e.g. phantom private key) format.
 
 ```
 HL_API_KEY=YOUR_API_KEY
