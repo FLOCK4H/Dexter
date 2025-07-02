@@ -21,12 +21,13 @@
 3. Algorithms for generating a **leaderboard for Pump.fun creators**, and **calculating token's composite score basing on price trend and transaction momentum**.
 4. Trading algorithm that incrementally handles current profit step: Buy / Sell.
 5. Fully async and concurrent operation.
+6. Settings system
 
 ![image](https://github.com/user-attachments/assets/97245720-25d4-464d-a579-5341d4cb8362)
 
-**If this comes useful airdrop some Solana:**
+**If this comes useful feel free to airdrop some Solana:**
 
-`3oFDwxVtZEpSGeNgdWRiJtNiArv4k9FiMsMz3yjudgeS`
+`FL4CKfetEWBMXFs15ZAz4peyGbCuzVaoszRKcoVt3WfC`
 
 **Thanks 💙**
 
@@ -46,26 +47,14 @@ What was used to make it all work?
 # Setup
 
 > [!NOTE]
-> This part is mainly for developers, ask your developer to set up the `Dexter` for you, or reach out to us [flock4h.cave](https://t.me/flock4hcave)
+> Dexter was designed to work both on Linux and Windows. Minimum requirements are: 100GB Free Disk Space (for Database that will grow daily), and 8-32GB of RAM.
 
-If you have less than 16GB of RAM and 100GB of disk space - you may only proceed further at your own risk, the more computational power you can supply the better.
-Please note that the server is optional, and if you meet the requirements you can do that on your local windows machine too.
-
-We've tested Dexter on servers with these specifications: 
-
-<h4>These are the minimum requirements</h4>
+We've tested Dexter on a server with these specifications: 
 
 - 16GB RAM
 - 4 VCPUs
 - 150GB SSD
 - Ubuntu Linux distro
-
-<h4>Now, for optimal performance</h4>
-
-- 32GB RAM
-- 4-8 VCPUs
-- 300GB SSD
-- Debian/ other Linux distro
 
 > [!TIP]
 > **Where to get a server?** </br>
@@ -75,14 +64,10 @@ We've tested Dexter on servers with these specifications:
 
 <h4>Libraries</h4>
 
-- solana==0.35.1
-- solders==0.21.0
-- aiohttp, websockets, base58, borsh_construct, requests, asyncpg
-
-Install them using Package Installer For Python (`pip`):
+List of libraries is in `req.txt` file, easily install it with:
 
 ```
-$ pip install solana==0.35.1 solders==0.21.0 aiohttp websockets base58 borsh_construct requests asyncpg
+$ pip install -r req.txt
 ```
 
 <h4>Required Stack</h4>
