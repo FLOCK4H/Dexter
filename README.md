@@ -5,7 +5,7 @@
   
 </div>
 
-# Dexter
+# Dexter 2.0
 
 **Fast and advanced Solana Pump.fun Sniper Bot powered by algorithms** that analyzes previously recorded token data, calculates Pump.fun token creators score basing on multiple factors such as their average profits or total swaps, and buys their new tokens in under a second.
 
