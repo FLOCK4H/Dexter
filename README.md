@@ -23,7 +23,7 @@
 5. Fully async and concurrent operation.
 6. Settings system
 
-![image](https://github.com/user-attachments/assets/97245720-25d4-464d-a579-5341d4cb8362)
+![image](https://github.com/user-attachments/assets/e74a40f3-c227-432b-9594-baddde39ace7)
 
 **If this comes useful feel free to airdrop some Solana:**
 
