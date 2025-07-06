@@ -184,7 +184,14 @@ max_connections = 500			# (change requires restart) ✔
 
 <h4>Step 2</h4>
 
-**For the `Dexter` to be able to gather data and trade tokens, we need to provide it with the APIs in `common_.py` file located in `DexLab` folder.** When using [helius](https://www.helius.dev) skip this part.
+**For the `Dexter` to be able to gather data and trade tokens, we need to provide it with the APIs in `.env` in the root project directory, or `common_.py` file located in `DexLab` folder.**
+
+**.env file structure**
+
+```
+HL_API_KEY=YOUR_HELIUS_API_KEY # example: 2r567111-5bf3-a23c-etci-XD...
+PRIVATE_KEY=YOUR_SOLANA_API_KEY # example: 4bAWEz915ggjuZrZLmkspVsFKyZjWLllObBrUhRwnxsfgFrhf...
+```
 
 Example using `Helius shared RPC` (all shared endpoint providers should work) 
 
@@ -194,14 +201,6 @@ Example using `Helius shared RPC` (all shared endpoint providers should work)
 STAKED_API = f"https://staked.helius-rpc.com?api-key={API_KEY}" # e.g. helius
 WS_URL = f"wss://mainnet.helius-rpc.com/?api-key={API_KEY}" # e.g. helius
 RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={API_KEY}" # e.g. helius
-```
-
-Then simply modify `.config` file to include `API_KEY`, `PRIVATE_KEY` - base58 (e.g. phantom private key) format.
-
-```
-HL_API_KEY=YOUR_API_KEY
-WALLET_ADDRESS=YOUR_WALLET_ADDRESS
-PRIVATE_KEY=YOUR_PRIVATE_KEY
 ```
 
 If you are using `solana-cli` to create your wallet you may want to convert your keypair into Private Key and Public Key, here is how to do that:
@@ -367,7 +366,7 @@ Transactions on 3MB/s home network take around 1-2 seconds, where on industrial 
 
 Launch `Dexter.py` to analyze current database data, convert that into a leaderboard list, and snipe new tokens.
 
-Launch `wsLogs.py` to collect entries for later sniping.
+Launch `wsLogs.py` to collect entries for sniping.
 
 ```
   $ python DexLab/wsLogs.py
