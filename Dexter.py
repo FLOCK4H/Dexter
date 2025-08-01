@@ -870,7 +870,7 @@ class Dexter:
                 private_key=self.privkey, 
                 wallet_address=self.wallet,
                 rpc_endpoint=STAKED_API, # Preferably staked rpc
-                api_key=API_KEY
+                api_key=RPC_URL
             )
 
             self.wallet_balance = await self.swaps.fetch_wallet_balance_sol()

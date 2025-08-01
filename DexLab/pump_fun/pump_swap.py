@@ -23,6 +23,7 @@ from solana.rpc.commitment import Processed
 from solders.message    import MessageV0 # type: ignore
 
 PUMP_FUN = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+GLOBAL_VOLUME_ACCUMULATOR = "Hq2wp8uJ9jCPsYgNHex8RtqdvMPfVGoYwjvF1ATiwn2Y"
 
 BUY_INSTRUCTION_SCHEMA = CStruct(
     "amount" / U64,
@@ -78,6 +79,12 @@ class PumpFun:
             )
         self.async_client = async_client
 
+    def _derive_uva_pda(self, payer: PublicKey):
+        user_acc, _ = PublicKey.find_program_address(
+            [b"user_volume_accumulator", bytes(payer)], PublicKey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
+        )
+        return user_acc
+
     async def build_buy_instruction(
         self,
         mint: PublicKey,
@@ -114,7 +121,9 @@ class PumpFun:
             AccountMeta(pubkey=PublicKey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), is_signer=False, is_writable=False), # tokenProgram
             AccountMeta(pubkey=PublicKey.from_string(str(vault)), is_signer=False, is_writable=True), # vault
             AccountMeta(pubkey=PublicKey.from_string("Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1"), is_signer=False, is_writable=False), # eventAuthority
-            AccountMeta(pubkey=PublicKey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), is_signer=False, is_writable=False)   # program
+            AccountMeta(pubkey=PublicKey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), is_signer=False, is_writable=False),   # program
+            AccountMeta(pubkey=PublicKey.from_string(GLOBAL_VOLUME_ACCUMULATOR), is_signer=False, is_writable=True), # globalVolumeAccumulator
+            AccountMeta(pubkey=self._derive_uva_pda(buyer), is_signer=False, is_writable=True), # userVolumeAccumulator
         ]
 
         return Instruction(

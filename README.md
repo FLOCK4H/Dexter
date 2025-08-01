@@ -189,7 +189,8 @@ max_connections = 500			# (change requires restart) ✔
 **.env file structure**
 
 ```
-HL_API_KEY=YOUR_HELIUS_API_KEY # example: 2r567111-5bf3-a23c-etci-XD...
+HTTP_URL=
+WS_URL=
 PRIVATE_KEY=YOUR_SOLANA_API_KEY # example: 4bAWEz915ggjuZrZLmkspVsFKyZjWLllObBrUhRwnxsfgFrhf...
 ```
 
