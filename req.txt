@@ -1,3 +1,4 @@
+asyncpg
 borsh_construct
 aiohttp
 base58
