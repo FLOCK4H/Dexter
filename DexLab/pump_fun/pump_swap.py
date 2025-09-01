@@ -24,6 +24,8 @@ from solders.message    import MessageV0 # type: ignore
 
 PUMP_FUN = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 GLOBAL_VOLUME_ACCUMULATOR = "Hq2wp8uJ9jCPsYgNHex8RtqdvMPfVGoYwjvF1ATiwn2Y"
+FEE_CONFIG = "8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt"
+FEE_PROGRAM = "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"
 
 BUY_INSTRUCTION_SCHEMA = CStruct(
     "amount" / U64,
@@ -124,6 +126,8 @@ class PumpFun:
             AccountMeta(pubkey=PublicKey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), is_signer=False, is_writable=False),   # program
             AccountMeta(pubkey=PublicKey.from_string(GLOBAL_VOLUME_ACCUMULATOR), is_signer=False, is_writable=True), # globalVolumeAccumulator
             AccountMeta(pubkey=self._derive_uva_pda(buyer), is_signer=False, is_writable=True), # userVolumeAccumulator
+            AccountMeta(pubkey=PublicKey.from_string(FEE_CONFIG), is_signer=False, is_writable=False), # feeConfig
+            AccountMeta(pubkey=PublicKey.from_string(FEE_PROGRAM), is_signer=False, is_writable=False), # feeProgram
         ]
 
         return Instruction(
@@ -169,7 +173,9 @@ class PumpFun:
             AccountMeta(pubkey=PublicKey.from_string(str(vault)), is_signer=False, is_writable=True),  # vault
             AccountMeta(pubkey=PublicKey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), is_signer=False, is_writable=False), # tokenProgram
             AccountMeta(pubkey=PublicKey.from_string("Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1"), is_signer=False, is_writable=False),  # eventAuthority
-            AccountMeta(pubkey=PublicKey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), is_signer=False, is_writable=False)    # program
+            AccountMeta(pubkey=PublicKey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), is_signer=False, is_writable=False),    # program
+            AccountMeta(pubkey=PublicKey.from_string(FEE_CONFIG), is_signer=False, is_writable=False), # feeConfig
+            AccountMeta(pubkey=PublicKey.from_string(FEE_PROGRAM), is_signer=False, is_writable=False), # feeProgram
         ]
 
         return Instruction(

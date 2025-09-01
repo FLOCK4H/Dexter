@@ -47,7 +47,7 @@ class Interpreters:
             }
             return decoded_data
         except Exception as e:
-            sys.stdout.write(f"\nError parsing transaction data ({b64_data}): {str(e)}" )
+            sys.stdout.write(f"\nError parsing transaction data ({b64_data}): {str(e)}")
             sys.stdout.flush()
     
     def parse_pumpfun_creation(self, b64_data):
