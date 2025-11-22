@@ -130,7 +130,7 @@ class SolanaSwaps:
                         meta = result.get("meta", {})
                         err = meta.get("err", {})
                         if err is not None and err.get("InstructionError"):
-                            logging.info(f"{cc.RED}Instruction error occurred: {err}")
+                            logging.info(f"{cc.RED}Instruction error occurred for {tx_id}: {err}")
                             await asyncio.sleep(5)
                             return "InstructionError"
                         
@@ -141,7 +141,7 @@ class SolanaSwaps:
                             for post_token_balance in post_token_balances:
                                 if post_token_balance.get("mint") == mint_token:
                                     if post_token_balance.get('owner') == self.wallet_address:
-                                        logging.info("Transaction verified.")
+                                        logging.info(f"Transaction verified for {tx_id}")
                                         token_balance = post_token_balance.get("uiTokenAmount", {}).get("amount")
                                         price = self.process_log(data)
                                         return {"balance": token_balance, "price": price}
@@ -151,12 +151,12 @@ class SolanaSwaps:
                                 price = self.process_log(data)
                                 return {"balance": sol_balance, "price": price}
                             else:
-                                logging.error("No post balances found for sell transaction.")
+                                logging.error(f"No post balances found for sell transaction {tx_id}")
                                 return None
                     else:
-                        logging.warning(f"Attempt {attempt + 1}: Transaction result is None.")
+                        logging.warning(f"Attempt {attempt + 1}: Transaction result is None for {tx_id}")
             except Exception as e:
-                logging.warning(f"Attempt {attempt + 1}: Exception occurred: {e}")
+                logging.warning(f"Attempt {attempt + 1}: Exception occurred for {tx_id}: {e}")
 
             attempt += 1
             if attempt < max_retries:

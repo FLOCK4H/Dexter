@@ -1,1 +1,6 @@
 __pycache__/
+
+/env/
+/dev/
+
+postgres_backup*
