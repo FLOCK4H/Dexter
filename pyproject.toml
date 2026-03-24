@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dexter"
+version = "0.0.0"
+description = "Dexter runtime tooling"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp",
+    "asyncpg",
+    "base58",
+    "borsh_construct",
+    "construct",
+    "httpx",
+    "python-dotenv",
+    "readchar",
+    "requests",
+    "solana",
+    "solders",
+    "websockets",
+]
+
+[project.scripts]
+dexter = "Dexter:main"
+
+[tool.setuptools]
+py-modules = [
+    "Dexter",
+    "database",
+    "dexter_alerts",
+    "dexter_cli",
+    "dexter_config",
+    "dexter_data_store",
+    "dexter_logging",
+    "dexter_mev",
+    "dexter_migration_harness",
+    "dexter_operator",
+    "dexter_phase2",
+    "dexter_price",
+    "dexter_strategy",
+    "dexter_time",
+    "key_convert",
+    "settings",
+]
+packages = ["DexAI", "DexLab", "DexLab.pump_fun"]

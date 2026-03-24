@@ -1,0 +1,14 @@
+__pycache__/
+build/
+dist/
+
+/env/
+/dev/
+.env
+.envenv
+*.egg-info/
+AGENTS.md
+PRD.md
+
+postgres_backup*
+/solana-dev-kit

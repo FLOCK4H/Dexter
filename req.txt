@@ -1,0 +1,12 @@
+asyncpg
+borsh_construct
+aiohttp
+base58
+websockets
+construct
+solana
+solders
+readchar
+requests
+httpx
+python-dotenv
