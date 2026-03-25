@@ -1,144 +1,99 @@
-# Dexter 2.1
+# Dexter 3.0
 
-Dexter is a Pump.fun-focused Solana trading runtime descended from the original FLOCK4H Dexter 2.0 codebase, but the operator surface is now centered on a single `dexter` command, explicit network selection, safer mainnet gates, a DB-free create handoff, and a cleaner operator workflow.
+Dexter 3.0 is a TUI-first Solana operator for Pump.fun and PumpSwap. The main surface is the interactive `dexter` menu: it edits the whole `.env`, onboards missing settings, launches runtime flows, handles create and manage workflows, and exposes operator controls without leaving the terminal. The CLI mirrors the same surface for automation and precise manual runs.
 
-## What Changed From Dexter 2.0
+Dexter is not documented here as a devnet-first toy. The examples below are mainnet-oriented, but they stay on paper, simulate, or dry-run paths unless you explicitly unlock live sends.
 
-- The main operator entrypoint is now `dexter`, not a loose mix of separate scripts.
-- `dexter help` and `dexter help <command>` work as expected.
-- `create` is network-aware and split into two clear modes:
-  - seeded handoff for an existing mint you already own or track
-  - on-chain Pump.fun create with build, simulate, or live send behavior
-- Every operator command except bare `dexter help` now makes the target network explicit with `--network`, including `create`, `manage`, `doctor`, `collector`, `trade`, `analyze`, `replay`, `backtest`, `verify-migration`, `export`, `dashboard`, `control`, and `database-init`.
-- Mainnet is guarded by `DEXTER_MAINNET_DRY_RUN` and `DEXTER_ALLOW_MAINNET_LIVE`.
-- Devnet is the intended place for live-runtime testing.
-- Pump.fun migration handling and PumpSwap exits are now part of the operator flow.
-- The research datastore adds replay, export, dashboard, and control tooling on top of the legacy runtime.
-- Priority fee selection is dynamic, and mainnet live buy/sell sends can optionally route through MEV block engines.
+## Start With The TUI
 
-## Safety Model
-
-- `DEXTER_NETWORK=devnet` ignores `HTTP_URL` and `WS_URL` and uses Dexter's built-in devnet RPC endpoints.
-- `DEXTER_NETWORK=mainnet` reads `HTTP_URL` and `WS_URL` from `.env`.
-- `DEXTER_RUNTIME_MODE=paper` keeps trading local.
-- `DEXTER_RUNTIME_MODE=simulate` signs and simulates, but does not submit.
-- `DEXTER_RUNTIME_MODE=live` can submit on-chain only when the network and safety gates allow it.
-- Mainnet live sends require both `DEXTER_MAINNET_DRY_RUN=false` and `DEXTER_ALLOW_MAINNET_LIVE=true`.
-- `USE_MEV` is mainnet-only. Dexter ignores it on devnet to avoid sender errors there.
-
-## Install
+Run:
 
 ```bash
-cp .env.example .env
+dexter
+```
+
+In an interactive terminal this opens Dexter's curses UI. It:
+
+- writes directly to `.env`
+- reloads config immediately after saves
+- guides missing setup through onboarding
+- asks for extra confirmation before `DEXTER_MAINNET_DRY_RUN=false` or `DEXTER_ALLOW_MAINNET_LIVE=true`
+
+Main menus:
+
+- `Run`: launch trader, collector, or analyzer
+- `Create`: seed an existing mint or plan/build a Pump.fun create
+- `Manage`: inspect or liquidate tracked positions
+- `Configure`: edit the full `.env`
+- `Help`: review modes, controls, and key runtime concepts
+
+The configuration pages are:
+
+- `Quick Setup`: network, mode, wallet, database, mainnet RPC
+- `Runtime & Safety`: wsLogs supervision, datastore, shutdown behavior, mainnet gates
+- `Risk & Strategy`: strategy profile, spend caps, reserve floor, retry behavior
+- `Alerts & Paths`: Telegram, Discord, desktop notifications, logs, state, exports, backups
+
+If you run `dexter` in a non-interactive shell, Dexter prints CLI help instead of launching the TUI. `dexter menu` and `dexter interactive` also open the TUI.
+
+## Install And Required Setup
+
+Dexter expects PostgreSQL-backed operation. Treat the database as required infrastructure.
+
+```bash
 python3 -m venv env
 source env/bin/activate
 pip install -r req.txt
 pip install -e .
+cp .env.example .env
 ```
 
-If you prefer editable installs only, `pip install -e .` is enough once your environment already has the repo dependencies.
+Minimum setup before running Dexter seriously:
 
-## Quick Start
+- database: set `DATABASE_URL` or the `DB_*` variables
+- bootstrap admin: set `POSTGRES_ADMIN_DSN` or `POSTGRES_ADMIN_*` if Dexter needs to create the DB, user, or schema
+- wallet: set `PRIVATE_KEY` or `DEXTER_TRADING_PRIVATE_KEY` for `simulate`, `live`, or on-chain `create`
+- mainnet RPC: set `HTTP_URL` and `WS_URL`
+- safety gates: leave `DEXTER_MAINNET_DRY_RUN=true` and `DEXTER_ALLOW_MAINNET_LIVE=false` until you intentionally want live mainnet sends
 
-1. Fill out `.env`.
-2. Run `dexter help` to see the command surface.
-3. Run `dexter doctor --network devnet --mode read_only`.
-4. If you need PostgreSQL bootstrap, use `dexter database-init` or `python3 database.py`.
-5. Start safely on devnet first:
+Bootstrap the database when needed:
 
 ```bash
-dexter run --network devnet --mode paper
+dexter database-init
 ```
 
-## Core Commands
-
-| Command | Purpose |
-| --- | --- |
-| `dexter run` / `dexter start` | Guided runtime entrypoint for trader, collector, or analyzer |
-| `dexter create` | Seed an existing position into Dexter or build/simulate/send a Pump.fun create |
-| `dexter manage` | Inspect or liquidate tracked local recovery-store positions |
-| `dexter doctor` | Validate env, RPC reachability, database connectivity, and writable paths |
-| `dexter collector` | Run the websocket collector standalone |
-| `dexter trade` | Run the trader directly |
-| `dexter analyze` | Run the creator analyzer |
-| `dexter replay` | Replay a stored normalized session |
-| `dexter backtest` | Evaluate a strategy profile offline |
-| `dexter verify-migration` | Run the deterministic devnet-safe migration harness |
-| `dexter export` | Export normalized research datasets |
-| `dexter dashboard` | Render the local operator dashboard |
-| `dexter control` | Pause, resume, force-sell, and manage watchlists/blacklists |
-| `dexter database-init` | Bootstrap the Dexter database and tables with explicit network-aware config resolution |
-
-Examples:
+Useful first checks:
 
 ```bash
 dexter help
-dexter help create
-dexter run --network devnet --mode paper
-dexter doctor --network mainnet --mode live
-dexter dashboard --network devnet --watch
-dexter database-init --network devnet
+dexter doctor --network mainnet --mode read_only
+dexter run --network mainnet --mode paper --doctor-first
 ```
 
-## Network-Aware Create
+## Mainnet Safety Model
 
-`dexter create` now expects you to choose one of two modes.
+- `read_only`: observe only
+- `paper`: run the full strategy loop with simulated positions and local PnL
+- `simulate`: sign and simulate transactions
+- `live`: submit live transactions where the selected network and gates allow it
 
-### 1. Seeded Handoff
+Mainnet rules:
 
-Use this when you already have the mint and want Dexter to take over position tracking and exit logic.
+- `DEXTER_MAINNET_DRY_RUN=true` keeps mainnet `live` in simulation behavior
+- real mainnet sends require both `DEXTER_MAINNET_DRY_RUN=false` and `DEXTER_ALLOW_MAINNET_LIVE=true`
+- `USE_MEV` only applies to live mainnet buy and sell submissions
+- mainnet `create` sends are blocked in Dexter's current create flow; use `--dry-run` or `--simulate-tx`
 
-```bash
-dexter create \
-  --network devnet \
-  --mode paper \
-  --mint <mint> \
-  --owner <creator> \
-  --buy-price 0.000000041 \
-  --token-balance 123456
-```
-
-Optional seeded flags:
-
-- `--bonding-curve`
-- `--market pump_fun|pump_swap`
-- `--cost-basis-lamports`
-- `--profit-target-pct`
-- `--load-database`
-
-By default, seeded create uses the DB-free handoff path.
-
-### 2. On-Chain Pump.fun Create
-
-Use this when Dexter should build the create transaction itself.
-
-Devnet build or simulate:
+## Few Mainnet-Oriented Examples
 
 ```bash
-dexter create \
-  --network devnet \
-  --mode simulate \
-  --name DexterTest \
-  --symbol DXT \
-  --uri https://example.invalid/token.json \
-  --buy-sol 0.01
-```
+# Open Dexter's main feature
+dexter
 
-Devnet live send:
+# Mainnet paper runtime with preflight checks
+dexter run --network mainnet --mode paper --doctor-first
 
-```bash
-dexter create \
-  --network devnet \
-  --mode live \
-  --name DexterTest \
-  --symbol DXT \
-  --uri https://example.invalid/token.json \
-  --buy-sol 0.01
-```
-
-Mainnet planning only:
-
-```bash
+# Mainnet create planning
 dexter create \
   --network mainnet \
   --mode live \
@@ -147,120 +102,274 @@ dexter create \
   --symbol DXT \
   --uri https://example.invalid/token.json \
   --buy-sol 0.01
+
+# Watch the operator dashboard against mainnet-configured state
+dexter dashboard --network mainnet --watch
 ```
 
-Notes:
+## Command Reference
 
-- Bare `dexter create` now prints the mode guide instead of only raw validation failures.
-- Mainnet create sends remain blocked here; use `--dry-run` or `--simulate-tx` for planning.
-- `--network` matters. Do not assume create is using devnet just because your last session did.
+### `dexter help`
 
-## Runtime Modes
+Show global help or the help for one command.
 
-| Mode | Behavior |
-| --- | --- |
-| `read_only` | Observe only, never trade |
-| `paper` | Local shadow position simulation |
-| `simulate` | Build signed transactions and simulate them |
-| `live` | Submit live transactions where the selected network and gates allow it |
+Args:
 
-## Mainnet MEV Routing
+- `<command>`: optional command name, for example `dexter help create`
 
-Dexter can translate the MEV sender pattern used in the local `solana-dev-kit` Rust repo for the major providers it references.
+### `dexter run` / `dexter start`
 
-Supported provider names:
+Guided launcher for the runtime.
 
-- `jito`
-- `helius`
-- `nextblock`
-- `zero_slot`
-- `temporal`
-- `bloxroute`
+Args:
 
-Minimal `.env` example:
+- `--mode {read_only,paper,simulate,live}`: override `DEXTER_RUNTIME_MODE`
+- `--network {devnet,mainnet}`: override `DEXTER_NETWORK`
+- `--target {trade,collector,analyze}`: choose what Dexter launches
+- `--doctor-first`: run `doctor` before launch
 
-```dotenv
-USE_MEV=true
-MEV_PROVIDER=jito
-MEV_TIP=0.00001
-MEV_JITO_KEY=
-```
+### `dexter collector`
 
-Provider-specific keys:
+Start the collector directly.
 
-- `MEV_JITO_KEY` is optional.
-- `MEV_NEXTBLOCK_KEY` is required for `MEV_PROVIDER=nextblock`.
-- `MEV_ZERO_SLOT_KEY` is required for `MEV_PROVIDER=zero_slot`.
-- `MEV_TEMPORAL_KEY` is required for `MEV_PROVIDER=temporal`.
-- `MEV_BLOXROUTE_KEY` is required for `MEV_PROVIDER=bloxroute`.
+Args:
 
-Behavior:
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
 
-- Dexter only uses MEV routing for mainnet live buy/sell submissions.
-- Dexter logs an announcement before each mainnet live buy/sell when MEV routing is active.
-- Devnet ignores `USE_MEV`.
-- The MEV tip is embedded into the signed transaction as a normal SOL transfer to the provider tip account before the provider-specific HTTP submit.
+### `dexter trade`
 
-## Recommended `.env` Baseline
+Start the trader directly.
 
-```dotenv
-DEXTER_RUNTIME_MODE=read_only
-DEXTER_NETWORK=devnet
-DEXTER_ALLOW_MAINNET_LIVE=false
-DEXTER_MAINNET_DRY_RUN=true
-HTTP_URL=https://api.mainnet-beta.solana.com
-WS_URL=wss://api.mainnet-beta.solana.com
-PRIVATE_KEY=
-DATABASE_URL=postgres://dexter_user:replace-me@127.0.0.1:5432/dexter_db
-USE_MEV=false
-MEV_PROVIDER=jito
-MEV_TIP=0.00001
-```
+Args:
 
-Use `.env.example` as the canonical list of supported variables.
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
 
-## Operator Workflow
+### `dexter analyze`
 
-Recommended day-to-day flow:
+Start the analyzer directly.
 
-1. `dexter doctor --network devnet --mode read_only`
-2. `dexter run --network devnet --mode paper`
-3. `dexter create --network devnet ...` for seeded or on-chain tests
-4. `dexter manage --network devnet`
-5. `dexter dashboard --network devnet --watch`
-6. Move to mainnet only after you intentionally flip the live-send gates
+Args:
 
-## Research Data Tooling
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
 
-Dexter's normalized research and operator layer powers:
+### `dexter doctor`
 
-- `replay`
-- `export`
-- `dashboard`
-- `control`
-- strategy profile snapshots
-- position journals and fill history
+Validate the current setup.
 
-This sits on top of the legacy market tables rather than replacing them.
+Args:
 
-## TUI
+- `--mode {read_only,paper,simulate,live}`: load config as that mode
+- `--network {devnet,mainnet}`: load config as that network
+- `--component {all,collector,trader}`: choose the validation profile
 
-If you launch `dexter` with no arguments in an interactive terminal, Dexter opens the curses operator menu. The TUI edits `.env`, launches commands, and exposes the same command surface through menus.
+Checks:
 
-For non-interactive shells and automation, prefer explicit commands:
+- env and safety gates
+- database connectivity
+- HTTP RPC reachability
+- WebSocket RPC reachability
+- wallet decoding
+- writable directories
+- backup tooling discovery
 
-```bash
-dexter help
-dexter run --network devnet --mode paper
-```
+### `dexter create`
 
-## Notes
+Seed an existing mint into Dexter or plan/build/send an on-chain Pump.fun create flow.
 
-- `HTTP_URL` and `WS_URL` only control mainnet. Devnet stays hardcoded by design.
-- `create`, `manage`, `doctor`, `collector`, `trade`, `analyze`, `replay`, `backtest`, `verify-migration`, `export`, `dashboard`, `control`, and `database-init` all take `--network` so the target cluster is explicit.
-- `manage`, `dashboard`, and `control` operate against the selected network's local state view.
-- `database.py` and `dexter database-init` can create or alter local PostgreSQL state. Use them intentionally.
+Common args:
 
-## Credit
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
+- `--dry-run`: preview or build only without the normal follow-through
 
-Dexter is based on the original FLOCK4H Dexter work and the current repo keeps that lineage while tightening the runtime, operator tooling, and safety model.
+Seeded handoff args:
+
+- `--mint`: mint Dexter should take over
+- `--owner`: creator or owner address for the session
+- `--bonding-curve`: Pump.fun bonding curve when the token is still on Pump.fun
+- `--market {pump_fun,pump_swap}`: starting market source
+- `--trust-level`: initial trust level
+- `--buy-price`: seed current or entry price
+- `--token-balance`: seed held token balance
+- `--cost-basis-lamports`: seed explicit cost basis
+- `--profit-target-pct`: seed target percentage
+- `--load-database`: opt back into standard DB bootstrap instead of DB-free handoff
+
+On-chain create args:
+
+- `--name`: token name
+- `--symbol`: token symbol
+- `--uri`: metadata URI
+- `--image`: local image to upload to Pump.fun IPFS
+- `--description`: description used with `--image`
+- `--twitter`: twitter URL used with `--image`
+- `--telegram`: telegram URL used with `--image`
+- `--website`: website URL used with `--image`
+- `--hide-name`: request `showName=false` during metadata upload
+- `--ipfs-upload-url`: override the Pump.fun IPFS upload endpoint
+- `--buy-sol`: bundled auto-buy size in SOL
+- `--slippage-pct`: bundled auto-buy slippage percent
+- `--priority-micro-lamports`: explicit compute-unit price
+- `--simulate-tx`: force signed simulation instead of send
+- `--no-follow`: do not launch Dexter after a live create send
+
+Rules:
+
+- seeded mode requires `--mint` and `--owner`
+- on-chain mode requires `--name`, `--symbol`, `--uri` or `--image`, and `--buy-sol > 0`
+- mainnet create sends are blocked; use `--dry-run` or `--simulate-tx`
+
+### `dexter manage`
+
+Inspect or liquidate positions from Dexter's local recovery store.
+
+Args:
+
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
+- `--sell-mint <mint>`: sell one tracked mint
+- `--sell-all`: sell every open tracked position for the selected network
+- `--reason <text>`: reason attached to manual exits
+- `--json`: emit the recovery-store view as JSON
+
+Note:
+
+- `manage` works from Dexter's local tracked-position store, not from a fresh wallet or chain inventory scan
+
+### `dexter dashboard`
+
+Render the operator dashboard.
+
+Args:
+
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
+- `--watch`: refresh continuously
+- `--interval <seconds>`: refresh interval for `--watch`
+- `--limit <rows>`: rows per dashboard section
+- `--json`: emit JSON instead of text
+
+### `dexter control`
+
+Manual operator controls.
+
+Args:
+
+- `action`: one of `pause`, `resume`, `force-sell`, `blacklist`, `whitelist`, `watchlist-add`, `watchlist-remove`
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
+- `--owner <creator>`: required for `blacklist` and `whitelist`
+- `--mint <mint>`: required for `force-sell`, `watchlist-add`, and `watchlist-remove`
+- `--reason <text>`: optional reason for `force-sell`
+
+### `dexter replay`
+
+Replay normalized session data.
+
+Args:
+
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
+- `--session-id <id>`: replay one session
+- `--mint-id <mint>`: replay the latest session for a mint
+- `--json`: emit JSON
+
+### `dexter export`
+
+Export normalized research data.
+
+Args:
+
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
+- `--kind {sessions,raw_events,leaderboard,positions,risk_events,strategy_profiles}`: choose dataset
+- `--output <path>`: output JSONL path
+- `--session-id <id>`: filter session exports
+- `--mint-id <mint>`: filter session or raw-event exports
+- `--leaderboard-version <version>`: filter leaderboard exports
+- `--limit <n>`: cap exported rows
+
+### `dexter backtest`
+
+Run a strategy backtest.
+
+Args:
+
+- `--mode {read_only,paper,simulate,live}`
+- `--network {devnet,mainnet}`
+- `--strategy {aggressive,balanced,conservative}`: choose profile
+- `--input <file>`: optional JSON or JSONL dataset
+- `--limit <n>`: max records loaded when `--input` is omitted
+- `--json`: emit JSON
+
+### `dexter verify-migration`
+
+Run the migration harness.
+
+Args:
+
+- `--mode {read_only,paper,simulate,live}`: config loading only
+- `--network {devnet,mainnet}`: devnet-only in practice
+- `--json`: emit JSON
+
+### `dexter database-init`
+
+Bootstrap Dexter's PostgreSQL database and tables.
+
+Args:
+
+- `--network {devnet,mainnet}`: config-resolution override; the work itself is local PostgreSQL bootstrap
+
+## The TUI Settings Pages
+
+### `Quick Setup`
+
+This is the fastest path to a usable Dexter session. It covers:
+
+- `DEXTER_NETWORK`
+- `DEXTER_RUNTIME_MODE`
+- `PRIVATE_KEY`
+- `DATABASE_URL`
+- `HTTP_URL`
+- `WS_URL`
+
+### `Runtime & Safety`
+
+This page controls the runtime switches that matter most operationally:
+
+- `DEXTER_ENABLE_WSLOGS`
+- `DEXTER_DATASTORE_ENABLED`
+- `DEXTER_CLOSE_POSITIONS_ON_SHUTDOWN`
+- `DEXTER_MAINNET_DRY_RUN`
+- `DEXTER_ALLOW_MAINNET_LIVE`
+
+### `Risk & Strategy`
+
+This page is where you shape how aggressive Dexter is:
+
+- `DEXTER_STRATEGY_PROFILE`
+- `DEXTER_PER_TRADE_SOL_CAP`
+- `DEXTER_SESSION_SOL_CAP`
+- `DEXTER_DAILY_SOL_CAP`
+- `DEXTER_WALLET_RESERVE_FLOOR_SOL`
+- `DEXTER_DAILY_DRAWDOWN_STOP_SOL`
+- retry and execution knobs
+- legacy trust-factor and profit-step settings
+
+### `Alerts & Paths`
+
+This page covers operational outputs and persistence:
+
+- Telegram, Discord, and desktop notifications
+- log, state, and export directories
+- backup directory and backup tooling settings
+
+## Operator Notes
+
+- `PRIVATE_KEY` is Dexter's default signer for create, buy, sell, and balance lookup
+- `DEXTER_TRADING_PRIVATE_KEY` overrides the trading signer when you want a separate execution key
+- `DATABASE_URL` is Dexter's preferred database setting inside the TUI
+- `dexter help <command>` is still the fastest CLI lookup when you only need one command's flags
