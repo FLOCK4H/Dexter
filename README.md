@@ -1,10 +1,22 @@
 # Dexter 3.0
 
-Dexter 3.0 is a TUI-first Solana operator for Pump.fun and PumpSwap. The main surface is the interactive `dexter` menu: it edits the whole `.env`, onboards missing settings, launches runtime flows, handles create and manage workflows, and exposes operator controls without leaving the terminal. The CLI mirrors the same surface for automation and precise manual runs.
 
-Dexter is not documented here as a devnet-first toy. The examples below are mainnet-oriented, but they stay on paper, simulate, or dry-run paths unless you explicitly unlock live sends.
+
+https://github.com/user-attachments/assets/6a09fae0-ad94-4ab0-a385-b870280d963e
+
+
+
+Dexter 3.0 is a TUI Solana app for Pump.fun and PumpSwap. The main surface is the interactive `dexter` menu: it edits the whole `.env`, onboards missing settings, launches runtime flows, handles create and manage workflows, and exposes operator controls without leaving the terminal. The CLI mirrors the same surface for automation and precise manual runs.
+
+<div align="center">
+  
+<img width="512" height="512" alt="image" src="https://github.com/user-attachments/assets/d00e5aaa-fea4-40cb-bb33-10e3836a1fd5" />
+
+</div>
 
 ## Start With The TUI
+
+<img width="512" height="512" alt="image" src="https://github.com/user-attachments/assets/1e12b66e-772f-4159-b887-2f908eaabb7f" />
 
 Run:
 
@@ -23,9 +35,21 @@ Main menus:
 
 - `Run`: launch trader, collector, or analyzer
 - `Create`: seed an existing mint or plan/build a Pump.fun create
+
+<img width="600" height="918" alt="image" src="https://github.com/user-attachments/assets/375b1c41-89d5-4bcd-9426-e1acccdde338" />
+
 - `Manage`: inspect or liquidate tracked positions
+
+<img width="600" height="918" alt="image" src="https://github.com/user-attachments/assets/9d4080da-ebad-486f-92dd-bd9b4c760061" />
+ 
 - `Configure`: edit the full `.env`
+
+<img width="600" height="918" alt="image" src="https://github.com/user-attachments/assets/11fdfafe-21ff-45b7-a94b-775752614b2b" />
+
 - `Help`: review modes, controls, and key runtime concepts
+
+<img width="600" height="918" alt="image" src="https://github.com/user-attachments/assets/faadaf32-e061-49dd-87fc-09e25f9ec9ca" />
+
 
 The configuration pages are:
 
