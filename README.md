@@ -90,7 +90,7 @@ Windows PostgreSQL one-command setup:
 dexter database-setup
 ```
 
-Windows may show a UAC prompt while Dexter installs PostgreSQL or starts the PostgreSQL service.
+On Windows, `dexter database-setup` is the public-ready path: it installs PostgreSQL binaries when needed, creates or reuses a Dexter-owned local cluster under `.dexter/postgres/...`, stores Dexter's real local admin and app credentials in managed metadata, rewrites `.env`, and creates the Dexter role, database, tables, and schema for you. The managed cluster listens on `127.0.0.1:55432` by default so it does not collide with a separate system PostgreSQL on `5432`.
 
 If you prefer a script from the repo root instead of the CLI command:
 
@@ -100,7 +100,7 @@ powershell -ExecutionPolicy Bypass -File .\install_postgres_windows.ps1
 
 Minimum setup before running Dexter seriously:
 
-- database: on Windows, `dexter database-setup` writes `DATABASE_URL`, `DB_*`, `POSTGRES_ADMIN_*`, and the local `pg_dump.exe` path for you
+- database: on Windows, `dexter database-setup` writes `DATABASE_URL`, `DB_*`, `POSTGRES_ADMIN_*`, Dexter's managed local PostgreSQL paths, and the local `pg_dump.exe` path for you
 - bootstrap admin: if you skip `database-setup`, set `POSTGRES_ADMIN_DSN` or `POSTGRES_ADMIN_*` when Dexter needs to create the DB, user, or schema
 - wallet: set `PRIVATE_KEY` or `DEXTER_TRADING_PRIVATE_KEY` for `simulate`, `live`, or on-chain `create`
 - mainnet RPC: set `HTTP_URL` and `WS_URL`
@@ -117,6 +117,8 @@ If PostgreSQL is already installed and running, or if you're on Linux/macOS and 
 ```bash
 dexter database-init
 ```
+
+On Windows, `dexter database-init` also repairs a Dexter-managed `.env` by reloading the real local admin and app passwords from Dexter's managed metadata before it refreshes roles and tables.
 
 Useful first checks:
 
@@ -373,7 +375,7 @@ Args:
 
 ### `dexter database-init`
 
-Bootstrap Dexter's PostgreSQL database and tables after PostgreSQL itself is already installed and reachable.
+Create or repair Dexter's PostgreSQL roles, database, tables, and schema after PostgreSQL itself exists. On Windows, this also repairs a Dexter-managed `.env` from Dexter's local PostgreSQL metadata when needed.
 
 Args:
 
@@ -381,18 +383,19 @@ Args:
 
 ### `dexter database-setup`
 
-Install and configure local PostgreSQL for Dexter on Windows, update `.env`, and run Dexter's schema bootstrap automatically.
+Install or repair Dexter's managed local PostgreSQL on Windows, update `.env`, and run Dexter's schema bootstrap automatically.
 
 Args:
 
 - `--network {devnet,mainnet}`: optional Dexter config override
 - `--major-version <n>`: WinGet PostgreSQL major version to install when PostgreSQL is missing
-- `--admin-password <password>`: local `postgres` superuser password; defaults to `postgres` for WinGet installs
+- `--admin-password <password>`: Dexter local `postgres` superuser password; defaults to the managed value or a generated password
 - `--db-user <name>`: Dexter application role name
 - `--db-password <password>`: Dexter application role password
 - `--db-name <name>`: Dexter application database name
-- `--db-host <host>`: local PostgreSQL host
-- `--db-port <port>`: local PostgreSQL port
+- `--db-port <port>`: local PostgreSQL port; defaults to the managed value or `55432`
+- `--cluster-dir <path>`: Dexter-managed PostgreSQL data directory
+- `--log-file <path>`: Dexter-managed PostgreSQL log file
 - `--skip-install`: skip WinGet and assume PostgreSQL is already installed locally
 - `--dry-run`: print the install and setup actions without changing the machine
 

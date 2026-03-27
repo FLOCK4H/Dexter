@@ -28,6 +28,7 @@ from dexter_config import (
     validate_config,
 )
 from dexter_data_store import Phase2Store, run_export, run_replay
+from dexter_local_postgres import ensure_local_postgres_running
 from dexter_operator import (
     add_watchlist_mint,
     blacklist_owner,
@@ -164,6 +165,7 @@ async def _check_database(config: AppConfig) -> CheckResult:
 
     conn = None
     try:
+        ensure_local_postgres_running(config)
         conn = await asyncpg.connect(config.database.dsn, timeout=5)
         await conn.execute("SELECT 1;")
         return CheckResult(
@@ -374,6 +376,7 @@ def run_analyze(args: argparse.Namespace) -> int:
     for warning in warnings:
         print(f"[{current_utc_timestamp()}] WARN  Analyze: {warning}")
 
+    ensure_local_postgres_running(config)
     ensure_directories(config)
     log_startup_summary(__import__("logging").getLogger("dexter.analyze"), config, "analyze")
     analyzer = Analyzer(config.database.dsn)
@@ -876,6 +879,7 @@ def run_replay_command(args: argparse.Namespace) -> int:
     for warning in warnings:
         print(f"[{current_utc_timestamp()}] WARN  Replay: {warning}")
 
+    ensure_local_postgres_running(config)
     output = asyncio.run(
         run_replay(
             config.database.dsn,
@@ -898,6 +902,7 @@ def run_export_command(args: argparse.Namespace) -> int:
     for warning in warnings:
         print(f"[{current_utc_timestamp()}] WARN  Export: {warning}")
 
+    ensure_local_postgres_running(config)
     output_path, count = asyncio.run(
         run_export(
             config.database.dsn,
@@ -916,6 +921,7 @@ def run_export_command(args: argparse.Namespace) -> int:
 
 def run_dashboard_command(args: argparse.Namespace) -> int:
     config = load_config(args.mode, network_override=getattr(args, "network", None))
+    ensure_local_postgres_running(config)
     ensure_directories(config)
     return int(
         asyncio.run(
@@ -983,6 +989,7 @@ def run_control_command(args: argparse.Namespace) -> int:
 
 def run_backtest_command(args: argparse.Namespace) -> int:
     config = load_config(args.mode, network_override=getattr(args, "network", None))
+    ensure_local_postgres_running(config)
     ensure_directories(config)
     profile = get_strategy_profile(args.strategy or config.strategy.default_profile)
 
@@ -1229,20 +1236,21 @@ def build_parser() -> argparse.ArgumentParser:
     control.add_argument("--reason", default="operator_force_sell", help="Optional reason for force-sell.")
     control.set_defaults(handler=run_control_command)
 
-    database_setup = subparsers.add_parser("database-setup", help="Install and configure local PostgreSQL for Dexter on Windows.")
+    database_setup = subparsers.add_parser("database-setup", help="Install or repair Dexter's managed local PostgreSQL instance on Windows.")
     database_setup.add_argument("--network", choices=["devnet", "mainnet"], help="Optional Dexter network override for config loading.")
-    database_setup.add_argument("--major-version", default="17", help="WinGet PostgreSQL major version to install when PostgreSQL is missing.")
-    database_setup.add_argument("--admin-password", help="Local postgres superuser password. Defaults to `postgres` for WinGet installs.")
-    database_setup.add_argument("--db-user", help="Dexter application database user. Defaults to DB_USER or dexter_user.")
-    database_setup.add_argument("--db-password", help="Dexter application database password. Defaults to DB_PASSWORD or a generated value.")
-    database_setup.add_argument("--db-name", help="Dexter application database name. Defaults to DB_NAME or dexter_db.")
-    database_setup.add_argument("--db-host", help="Local PostgreSQL host. Defaults to DB_HOST or 127.0.0.1.")
-    database_setup.add_argument("--db-port", type=int, help="Local PostgreSQL port. Defaults to DB_PORT or 5432.")
-    database_setup.add_argument("--skip-install", action="store_true", help="Do not run WinGet; assume PostgreSQL is already installed locally.")
+    database_setup.add_argument("--major-version", default="17", help="WinGet PostgreSQL major version to install when PostgreSQL binaries are missing.")
+    database_setup.add_argument("--admin-password", help="Password for Dexter's local postgres superuser. Defaults to the managed value or a generated password.")
+    database_setup.add_argument("--db-user", help="Dexter application database user. Defaults to the managed value, DB_USER, or dexter_user.")
+    database_setup.add_argument("--db-password", help="Dexter application database password. Defaults to the managed value, DB_PASSWORD, or a generated value.")
+    database_setup.add_argument("--db-name", help="Dexter application database name. Defaults to the managed value, DB_NAME, or dexter_db.")
+    database_setup.add_argument("--db-port", type=int, help="Local PostgreSQL port. Defaults to the managed value or 55432.")
+    database_setup.add_argument("--cluster-dir", help="Path for Dexter's local PostgreSQL data directory. Defaults to .dexter/postgres/<version>/data.")
+    database_setup.add_argument("--log-file", help="Path for Dexter's local PostgreSQL log file.")
+    database_setup.add_argument("--skip-install", action="store_true", help="Do not run WinGet; assume PostgreSQL binaries are already installed locally.")
     database_setup.add_argument("--dry-run", action="store_true", help="Print the intended install/setup actions without changing the machine.")
     database_setup.set_defaults(handler=run_database_setup)
 
-    database_init = subparsers.add_parser("database-init", help="Bootstrap the Dexter database and tables after PostgreSQL is already installed.")
+    database_init = subparsers.add_parser("database-init", help="Create or repair Dexter's database roles, tables, and schema after PostgreSQL exists.")
     database_init.add_argument("--network", choices=["devnet", "mainnet"], help="Override DEXTER_NETWORK for this command.")
     database_init.set_defaults(handler=run_database_init)
 

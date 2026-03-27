@@ -4,6 +4,7 @@ dist/
 
 /env/
 /dev/
+/.dexter/
 .env
 .envenv
 *.egg-info/

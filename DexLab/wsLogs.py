@@ -9,6 +9,7 @@ import signal
 import datetime as dt
 
 from dexter_config import ensure_directories, load_config, log_startup_summary, validate_config
+from dexter_local_postgres import ensure_local_postgres_running
 from dexter_operator import publish_runtime_snapshot
 
 try:
@@ -403,6 +404,7 @@ class DexBetterLogs:
 
 async def _main(mode_override=None, network_override=None):
     config = load_config(mode_override, network_override=network_override)
+    ensure_local_postgres_running(config)
     errors, warnings = validate_config(config, "collector")
     if errors:
         raise RuntimeError("; ".join(errors))

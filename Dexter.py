@@ -71,6 +71,7 @@ from dexter_config import (
 )
 from dexter_logging import configure_root_logging
 from dexter_data_store import Phase2Store
+from dexter_local_postgres import ensure_local_postgres_running
 from dexter_strategy import (
     evaluate_entry,
     explain_sell,
@@ -4315,6 +4316,8 @@ def liquidate_managed_position(
 
 def run(mode_override=None, network_override=None, session_seed=None):
     config = load_config(mode_override, network_override=network_override)
+    if not (session_seed and session_seed.get("skip_database")):
+        ensure_local_postgres_running(config)
     errors, warnings = validate_config(config, "trader")
     if session_seed and session_seed.get("skip_database"):
         errors = [error for error in errors if "DATABASE_URL" not in error and "DB_*" not in error]

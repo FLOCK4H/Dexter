@@ -1,27 +1,39 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
+import asyncio
 import os
 from pathlib import Path
 import secrets
 import shutil
 import string
 import subprocess
-import sys
-import time
 from urllib.parse import quote
 
 from dexter_config import ENV_PATH, PROJECT_ROOT, current_utc_timestamp, read_env_values, update_env_file
+from dexter_local_postgres import (
+    BIN_DIR_ENV,
+    DATA_DIR_ENV,
+    LOCAL_POSTGRES_DEFAULT_MAJOR,
+    LOCAL_POSTGRES_DEFAULT_PORT,
+    LOG_FILE_ENV,
+    MANAGED_FLAG_ENV,
+    PORT_ENV,
+    default_local_postgres_data_dir,
+    default_local_postgres_log_file,
+    discover_postgres_bin,
+    ensure_local_postgres_running,
+    initialize_local_cluster,
+    load_managed_postgres_state,
+    start_local_postgres,
+    write_managed_postgres_state,
+)
 
 DEFAULT_DB_HOST = "127.0.0.1"
-DEFAULT_DB_PORT = 5432
 DEFAULT_DB_NAME = "dexter_db"
 DEFAULT_DB_USER = "dexter_user"
 DEFAULT_ADMIN_DB = "postgres"
 DEFAULT_ADMIN_USER = "postgres"
-DEFAULT_ADMIN_PASSWORD = "postgres"
-DEFAULT_POSTGRES_MAJOR = "17"
 PLACEHOLDER_VALUES = {"", "replace-me"}
 
 
@@ -34,6 +46,14 @@ def _quote_env_dsn(user: str, password: str, host: str, port: int, database: str
     if password:
         auth = f"{auth}:{quote(password, safe='')}"
     return f"postgres://{auth}@{host}:{port}/{database}"
+
+
+def _quote_ident(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _quote_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def _is_placeholder(value: str | None) -> bool:
@@ -57,149 +77,13 @@ def _ensure_env_file() -> None:
     _log(f"Created empty env file at {ENV_PATH}.")
 
 
-def _version_key(path: Path) -> tuple[int, ...]:
-    parts: list[int] = []
-    for token in path.name.replace("-", ".").split("."):
-        if token.isdigit():
-            parts.append(int(token))
-    return tuple(parts) or (0,)
-
-
-def _discover_postgres_bin(preferred_major: str | None) -> Path | None:
-    candidates: list[Path] = []
-    seen: set[str] = set()
-
-    psql_on_path = shutil.which("psql")
-    if psql_on_path:
-        bin_dir = Path(psql_on_path).resolve().parent
-        seen.add(str(bin_dir).lower())
-        candidates.append(bin_dir)
-
-    roots = {
-        os.environ.get("ProgramFiles"),
-        os.environ.get("ProgramW6432"),
-        os.environ.get("ProgramFiles(x86)"),
-    }
-    for root in roots:
-        if not root:
-            continue
-        postgres_root = Path(root) / "PostgreSQL"
-        if not postgres_root.exists():
-            continue
-        for child in postgres_root.iterdir():
-            bin_dir = child / "bin"
-            if not (bin_dir / "psql.exe").exists():
-                continue
-            key = str(bin_dir).lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(bin_dir)
-
-    if not candidates:
-        return None
-
-    preferred: list[Path] = []
-    fallback: list[Path] = []
-    for candidate in candidates:
-        version_name = candidate.parent.name
-        if preferred_major and (version_name.startswith(f"{preferred_major}.") or version_name == preferred_major):
-            preferred.append(candidate)
-        else:
-            fallback.append(candidate)
-
-    pool = preferred or fallback
-    pool.sort(key=lambda item: _version_key(item.parent), reverse=True)
-    return pool[0]
-
-
-def _run_process(command: list[str], *, env: dict[str, str] | None = None, check: bool = False) -> subprocess.CompletedProcess[str]:
+def _run_process(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
         cwd=str(PROJECT_ROOT),
         text=True,
         capture_output=True,
-        env=env,
-        check=check,
     )
-
-
-def _is_windows_admin() -> bool:
-    if os.name != "nt":
-        return False
-    try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
-
-
-def _powershell_quote(value: str) -> str:
-    return value.replace("'", "''")
-
-
-def _powershell(command: str) -> subprocess.CompletedProcess[str]:
-    return _run_process(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            command,
-        ]
-    )
-
-
-def _rebuild_cli_args(args: argparse.Namespace) -> list[str]:
-    rebuilt: list[str] = []
-    for key in ("network", "major_version", "admin_password", "db_user", "db_password", "db_name", "db_host", "db_port"):
-        value = getattr(args, key, None)
-        if value in (None, ""):
-            continue
-        rebuilt.extend([f"--{key.replace('_', '-')}", str(value)])
-    for key in ("skip_install", "dry_run"):
-        if getattr(args, key, False):
-            rebuilt.append(f"--{key.replace('_', '-')}")
-    return rebuilt
-
-
-def _rerun_elevated(args: argparse.Namespace) -> int:
-    script_path = str(Path(__file__).resolve())
-    python_path = sys.executable or "python"
-    command_args = [script_path, *_rebuild_cli_args(args)]
-    rendered_args = ", ".join(f"'{_powershell_quote(item)}'" for item in command_args)
-    ps_command = (
-        f"$p = Start-Process -FilePath '{_powershell_quote(python_path)}' "
-        f"-ArgumentList @({rendered_args}) "
-        f"-WorkingDirectory '{_powershell_quote(str(PROJECT_ROOT))}' "
-        f"-Verb RunAs -Wait -PassThru; "
-        "exit $p.ExitCode"
-    )
-    _log("Administrator approval is required. Windows will open an elevated prompt to finish PostgreSQL setup.")
-    result = _powershell(ps_command)
-    if result.returncode != 0:
-        details = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"Unable to start an elevated PostgreSQL setup session. {details or 'The UAC prompt may have been cancelled.'}")
-    return 0
-
-
-def _postgres_service_names() -> list[str]:
-    result = _powershell(
-        "Get-Service | "
-        "Where-Object { $_.Name -like 'postgresql*' -or $_.DisplayName -like 'PostgreSQL*' } | "
-        "Select-Object -ExpandProperty Name"
-    )
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
-def _start_postgres_services() -> None:
-    for name in _postgres_service_names():
-        _powershell(
-            f"try {{ Set-Service -Name '{name}' -StartupType Automatic -ErrorAction SilentlyContinue; "
-            f"Start-Service -Name '{name}' -ErrorAction Stop }} catch {{ }}"
-        )
 
 
 def _install_postgres_with_winget(major_version: str, *, dry_run: bool) -> None:
@@ -218,7 +102,7 @@ def _install_postgres_with_winget(major_version: str, *, dry_run: bool) -> None:
         "--accept-source-agreements",
         "--silent",
     ]
-    _log(f"Installing PostgreSQL {major_version} with WinGet.")
+    _log(f"Installing PostgreSQL {major_version} binaries with WinGet.")
     if dry_run:
         print(" ".join(command))
         return
@@ -231,74 +115,54 @@ def _install_postgres_with_winget(major_version: str, *, dry_run: bool) -> None:
         )
 
 
-def _wait_for_postgres(psql_path: Path, host: str, port: int, user: str, password: str, *, timeout_seconds: float = 90.0) -> None:
-    deadline = time.time() + timeout_seconds
-    env = os.environ.copy()
-    env["PGPASSWORD"] = password
-    command = [
-        str(psql_path),
-        "-h",
-        host,
-        "-p",
-        str(port),
-        "-U",
-        user,
-        "-d",
-        DEFAULT_ADMIN_DB,
-        "-tAc",
-        "SELECT 1;",
-    ]
-
-    last_error = ""
-    while time.time() < deadline:
-        result = _run_process(command, env=env)
-        stdout = (result.stdout or "").strip()
-        stderr = (result.stderr or "").strip()
-        if result.returncode == 0 and stdout == "1":
-            return
-        if "password authentication failed" in stderr.lower():
-            raise RuntimeError(
-                "PostgreSQL is installed, but the postgres password did not match. "
-                "Rerun `dexter database-setup --admin-password <your-local-postgres-password>`."
-            )
-        last_error = stderr or stdout or last_error
-        time.sleep(2)
-
-    raise RuntimeError(
-        f"PostgreSQL did not become ready on {host}:{port}. "
-        f"Last check result: {last_error or 'connection still unavailable'}"
-    )
-
-
-def _resolve_db_settings(args: argparse.Namespace) -> dict[str, str]:
+def _resolve_settings(args: argparse.Namespace) -> dict[str, str]:
     env_values = read_env_values(ENV_PATH)
+    major_version = str(args.major_version or LOCAL_POSTGRES_DEFAULT_MAJOR).strip() or LOCAL_POSTGRES_DEFAULT_MAJOR
 
-    admin_password = str(args.admin_password or env_values.get("POSTGRES_ADMIN_PASSWORD") or "").strip()
-    if _is_placeholder(admin_password):
-        admin_password = DEFAULT_ADMIN_PASSWORD
+    cluster_dir = Path(
+        str(args.cluster_dir or env_values.get(DATA_DIR_ENV) or default_local_postgres_data_dir(PROJECT_ROOT, major_version=major_version))
+    ).expanduser()
+    existing_state = load_managed_postgres_state(cluster_dir) or {}
 
-    db_password = str(args.db_password or env_values.get("DB_PASSWORD") or "").strip()
+    db_host = str(existing_state.get("db_host") or env_values.get("DB_HOST") or DEFAULT_DB_HOST).strip() or DEFAULT_DB_HOST
+    port = int(
+        args.db_port
+        or existing_state.get("db_port")
+        or existing_state.get("port")
+        or env_values.get(PORT_ENV)
+        or env_values.get("DB_PORT")
+        or LOCAL_POSTGRES_DEFAULT_PORT
+    )
+    db_name = str(args.db_name or existing_state.get("db_name") or env_values.get("DB_NAME") or DEFAULT_DB_NAME).strip() or DEFAULT_DB_NAME
+    db_user = str(args.db_user or existing_state.get("db_user") or env_values.get("DB_USER") or DEFAULT_DB_USER).strip() or DEFAULT_DB_USER
+    db_password = str(args.db_password or existing_state.get("db_password") or env_values.get("DB_PASSWORD") or "").strip()
     if _is_placeholder(db_password):
         db_password = _generate_password()
 
-    db_host = str(args.db_host or env_values.get("DB_HOST") or DEFAULT_DB_HOST).strip() or DEFAULT_DB_HOST
-    db_port = int(args.db_port or env_values.get("DB_PORT") or DEFAULT_DB_PORT)
-    db_name = str(args.db_name or env_values.get("DB_NAME") or DEFAULT_DB_NAME).strip() or DEFAULT_DB_NAME
-    db_user = str(args.db_user or env_values.get("DB_USER") or DEFAULT_DB_USER).strip() or DEFAULT_DB_USER
+    admin_password = str(args.admin_password or existing_state.get("admin_password") or env_values.get("POSTGRES_ADMIN_PASSWORD") or "").strip()
+    if _is_placeholder(admin_password):
+        admin_password = _generate_password()
+
+    log_file = Path(
+        str(args.log_file or existing_state.get("log_file") or env_values.get(LOG_FILE_ENV) or default_local_postgres_log_file(PROJECT_ROOT, major_version=major_version))
+    ).expanduser()
 
     return {
         "db_host": db_host,
-        "db_port": str(db_port),
+        "db_port": str(port),
         "db_name": db_name,
         "db_user": db_user,
         "db_password": db_password,
         "admin_user": DEFAULT_ADMIN_USER,
         "admin_password": admin_password,
         "admin_db": DEFAULT_ADMIN_DB,
+        "major_version": major_version,
+        "cluster_dir": str(cluster_dir),
+        "log_file": str(log_file),
     }
 
 
-def _write_db_env(settings: dict[str, str], pg_dump_path: Path) -> None:
+def _write_managed_env(settings: dict[str, str], *, bin_dir: Path, pg_dump_path: Path) -> None:
     db_host = settings["db_host"]
     db_port = int(settings["db_port"])
     db_name = settings["db_name"]
@@ -310,6 +174,11 @@ def _write_db_env(settings: dict[str, str], pg_dump_path: Path) -> None:
 
     update_env_file(
         {
+            MANAGED_FLAG_ENV: "true",
+            BIN_DIR_ENV: str(bin_dir),
+            DATA_DIR_ENV: settings["cluster_dir"],
+            LOG_FILE_ENV: settings["log_file"],
+            PORT_ENV: str(db_port),
             "DB_HOST": db_host,
             "DB_PORT": str(db_port),
             "DB_NAME": db_name,
@@ -329,29 +198,70 @@ def _write_db_env(settings: dict[str, str], pg_dump_path: Path) -> None:
     )
 
 
+async def _set_role_password(dsn: str, role_name: str, password: str) -> None:
+    import asyncpg
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            f"ALTER USER {_quote_ident(role_name)} WITH PASSWORD {_quote_literal(password)};"
+        )
+    finally:
+        await conn.close()
+
+
+def _existing_admin_dsn(state: dict[str, str]) -> str:
+    host = str(state.get("db_host") or DEFAULT_DB_HOST)
+    port = int(state.get("db_port") or state.get("port") or LOCAL_POSTGRES_DEFAULT_PORT)
+    user = str(state.get("admin_user") or DEFAULT_ADMIN_USER)
+    password = str(state.get("admin_password") or "")
+    database = str(state.get("admin_db") or DEFAULT_ADMIN_DB)
+    return _quote_env_dsn(user, password, host, port, database)
+
+
+def _maybe_rotate_admin_password(existing_state: dict[str, str] | None, settings: dict[str, str]) -> None:
+    if not existing_state:
+        return
+
+    current_password = str(existing_state.get("admin_password") or "").strip()
+    desired_password = settings["admin_password"]
+    if not current_password or current_password == desired_password:
+        return
+
+    _log("Refreshing Dexter local postgres superuser password.")
+    asyncio.run(_set_role_password(_existing_admin_dsn(existing_state), settings["admin_user"], desired_password))
+
+
 def run_windows_setup(args: argparse.Namespace) -> int:
     if os.name != "nt":
         raise RuntimeError(
             "Dexter's automated PostgreSQL bootstrap currently supports Windows only. "
             "On Linux, use `./install_postgre.sh`."
         )
-    if not args.dry_run and not _is_windows_admin():
-        return _rerun_elevated(args)
 
     _ensure_env_file()
-    settings = _resolve_db_settings(args)
+    settings = _resolve_settings(args)
+    cluster_dir = Path(settings["cluster_dir"])
+    log_file = Path(settings["log_file"])
+    existing_state = load_managed_postgres_state(cluster_dir)
 
-    postgres_bin = _discover_postgres_bin(args.major_version)
+    postgres_bin: Path | None = None
+    if existing_state:
+        state_bin_dir = Path(str(existing_state.get("bin_dir") or ""))
+        if state_bin_dir and (state_bin_dir / "psql.exe").exists():
+            postgres_bin = state_bin_dir
+    if postgres_bin is None:
+        postgres_bin = discover_postgres_bin(settings["major_version"])
+
     if postgres_bin is None and not args.skip_install:
-        _install_postgres_with_winget(args.major_version, dry_run=bool(args.dry_run))
+        _install_postgres_with_winget(settings["major_version"], dry_run=bool(args.dry_run))
         if args.dry_run:
             return 0
-        postgres_bin = _discover_postgres_bin(args.major_version)
+        postgres_bin = discover_postgres_bin(settings["major_version"])
 
     if postgres_bin is None:
         raise RuntimeError(
-            "PostgreSQL tools were not found after installation. "
-            "Install PostgreSQL with WinGet or rerun with `--major-version` set to an installed version."
+            "PostgreSQL tools were not found. Install PostgreSQL first or rerun `dexter database-setup` without `--skip-install`."
         )
 
     psql_path = postgres_bin / "psql.exe"
@@ -362,55 +272,78 @@ def run_windows_setup(args: argparse.Namespace) -> int:
         raise RuntimeError(f"pg_dump.exe was not found in {postgres_bin}.")
 
     _log(f"Using PostgreSQL tools from {postgres_bin}.")
+    _log(f"Dexter will manage its own local PostgreSQL cluster in {cluster_dir}.")
+
     if args.dry_run:
+        _log(f"Would initialize or reuse a private local PostgreSQL cluster on {settings['db_host']}:{settings['db_port']}.")
+        _log(f"Would create or refresh Dexter's local postgres admin password, app user, database, tables, and schema metadata.")
         _log(f"Would write Dexter database settings to {ENV_PATH}.")
         _log("Dry run complete.")
         return 0
 
-    _start_postgres_services()
-    _wait_for_postgres(
-        psql_path,
-        settings["db_host"],
-        int(settings["db_port"]),
-        settings["admin_user"],
-        settings["admin_password"],
+    initialize_local_cluster(
+        bin_dir=postgres_bin,
+        data_dir=cluster_dir,
+        log_file=log_file,
+        port=int(settings["db_port"]),
+        admin_user=settings["admin_user"],
+        admin_password=settings["admin_password"],
     )
-    _write_db_env(settings, pg_dump_path)
+    start_local_postgres(
+        bin_dir=postgres_bin,
+        data_dir=cluster_dir,
+        log_file=log_file,
+        port=int(settings["db_port"]),
+        timeout_seconds=90.0,
+    )
+    _maybe_rotate_admin_password(existing_state, settings)
+    write_managed_postgres_state(
+        bin_dir=postgres_bin,
+        data_dir=cluster_dir,
+        log_file=log_file,
+        port=int(settings["db_port"]),
+        db_host=settings["db_host"],
+        db_port=int(settings["db_port"]),
+        db_name=settings["db_name"],
+        db_user=settings["db_user"],
+        db_password=settings["db_password"],
+        admin_db=settings["admin_db"],
+        admin_user=settings["admin_user"],
+        admin_password=settings["admin_password"],
+        pg_dump_path=pg_dump_path,
+    )
+    _write_managed_env(settings, bin_dir=postgres_bin, pg_dump_path=pg_dump_path)
+    ensure_local_postgres_running(timeout_seconds=90.0)
 
     from database import run as run_database_init
 
     _log(f"Running Dexter schema bootstrap with env file {ENV_PATH}.")
     run_database_init(network_override=getattr(args, "network", None))
     _log("Windows PostgreSQL setup completed successfully.")
-    _log(f"Dexter wrote database settings to {ENV_PATH}.")
+    _log(f"Dexter now owns the local postgres admin password, app role, database, tables, and schema. Env file: {ENV_PATH}")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Install and configure a local PostgreSQL instance for Dexter on Windows.",
+        description="Install and configure a Dexter-managed local PostgreSQL instance on Windows.",
     )
     parser.add_argument("--network", choices=["devnet", "mainnet"], help="Optional Dexter network override for config loading.")
-    parser.add_argument("--major-version", default=DEFAULT_POSTGRES_MAJOR, help="WinGet PostgreSQL major version to install when PostgreSQL is missing.")
-    parser.add_argument("--admin-password", help="Local postgres superuser password. Defaults to `postgres` for WinGet installs.")
-    parser.add_argument("--db-user", help="Dexter application database user. Defaults to DB_USER or dexter_user.")
-    parser.add_argument("--db-password", help="Dexter application database password. Defaults to DB_PASSWORD or a generated value.")
-    parser.add_argument("--db-name", help="Dexter application database name. Defaults to DB_NAME or dexter_db.")
-    parser.add_argument("--db-host", help="Local PostgreSQL host. Defaults to DB_HOST or 127.0.0.1.")
-    parser.add_argument("--db-port", type=int, help="Local PostgreSQL port. Defaults to DB_PORT or 5432.")
-    parser.add_argument("--skip-install", action="store_true", help="Do not run WinGet; assume PostgreSQL is already installed locally.")
+    parser.add_argument("--major-version", default=LOCAL_POSTGRES_DEFAULT_MAJOR, help="WinGet PostgreSQL major version to install when PostgreSQL binaries are missing.")
+    parser.add_argument("--admin-password", help="Password for Dexter's local postgres superuser. Defaults to the existing managed password or a generated password.")
+    parser.add_argument("--db-user", help="Dexter application database user. Defaults to the managed value, DB_USER, or dexter_user.")
+    parser.add_argument("--db-password", help="Dexter application database password. Defaults to the managed value, DB_PASSWORD, or a generated value.")
+    parser.add_argument("--db-name", help="Dexter application database name. Defaults to the managed value, DB_NAME, or dexter_db.")
+    parser.add_argument("--db-port", type=int, help=f"Local PostgreSQL port. Defaults to the managed value or {LOCAL_POSTGRES_DEFAULT_PORT}.")
+    parser.add_argument("--cluster-dir", help="Path for Dexter's local PostgreSQL data directory. Defaults to .dexter/postgres/<version>/data.")
+    parser.add_argument("--log-file", help="Path for Dexter's local PostgreSQL log file.")
+    parser.add_argument("--skip-install", action="store_true", help="Do not run WinGet; assume PostgreSQL binaries are already installed locally.")
     parser.add_argument("--dry-run", action="store_true", help="Print the intended install/setup actions without changing the machine.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if os.name != "nt":
-        print(
-            "Dexter's Windows PostgreSQL bootstrap is only supported on Windows. "
-            "On Linux, use `./install_postgre.sh` instead."
-        )
-        return 1
     try:
         return int(run_windows_setup(args))
     except Exception as exc:
