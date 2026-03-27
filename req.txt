@@ -10,3 +10,4 @@ readchar
 requests
 httpx
 python-dotenv
+windows-curses; platform_system == "Windows"

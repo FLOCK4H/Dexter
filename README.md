@@ -8,6 +8,8 @@ https://github.com/user-attachments/assets/6a09fae0-ad94-4ab0-a385-b870280d963e
 
 Dexter 3.0 is a TUI Solana app for Pump.fun and PumpSwap. **Main function is to gather Pump.fun creators and see how their tokens perform by running calculations with an algorithm, then composing a leaderboard out of creators. It monitors Pump.fun for new tokens, buys if creator of the token is in leaderboard.** The main surface is the interactive `dexter` menu: it edits the whole `.env`, onboards missing settings, launches runtime flows, handles create and manage workflows, and exposes operator controls without leaving the terminal. The CLI mirrors the same surface for automation and precise manual runs.
 
+Windows note: Dexter's TUI uses `curses`. `pip install .` now installs `windows-curses` automatically on Windows, and if the TUI dependency is unavailable Dexter falls back to CLI help instead of crashing during import.
+
 <div align="center">
   
 <img width="512" height="512" alt="image" src="https://github.com/user-attachments/assets/d00e5aaa-fea4-40cb-bb33-10e3836a1fd5" />
@@ -58,7 +60,7 @@ The configuration pages are:
 - `Risk & Strategy`: strategy profile, spend caps, reserve floor, retry behavior
 - `Alerts & Paths`: Telegram, Discord, desktop notifications, logs, state, exports, backups
 
-If you run `dexter` in a non-interactive shell, Dexter prints CLI help instead of launching the TUI. `dexter menu` and `dexter interactive` also open the TUI.
+If you run `dexter` in a non-interactive shell, Dexter prints CLI help instead of launching the TUI. `dexter menu` and `dexter interactive` also open the TUI. If the TUI dependency is missing, Dexter prints an install hint and the CLI remains available through commands like `dexter help` and `dexter doctor`.
 
 ## Install And Required Setup
 
@@ -70,6 +72,16 @@ source env/bin/activate
 pip install -r req.txt
 pip install -e .
 cp .env.example .env
+```
+
+Windows PowerShell:
+
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r req.txt
+python -m pip install -e .
+Copy-Item .env.example .env
 ```
 
 Minimum setup before running Dexter seriously:

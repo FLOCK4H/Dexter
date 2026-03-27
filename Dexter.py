@@ -1,11 +1,20 @@
 import argparse
 import asyncio
-import curses
 import logging
 import os
 import sys
 import threading
 from pathlib import Path
+
+try:
+    import curses
+except ModuleNotFoundError as exc:
+    if exc.name not in {"curses", "_curses"}:
+        raise
+    curses = None  # type: ignore[assignment]
+    _CURSES_IMPORT_ERROR = exc
+else:
+    _CURSES_IMPORT_ERROR = None
 
 if __package__ in (None, ""):
     from DexAI.trust_factor import Analyzer
@@ -238,6 +247,23 @@ def _position_unrealized_profit_lamports(position: dict[str, Any]) -> int | None
 
 def _interactive_terminal() -> bool:
     return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def _tui_available() -> tuple[bool, str | None]:
+    if curses is not None:
+        return True, None
+
+    detail = "Dexter's interactive terminal UI is unavailable because Python could not import curses."
+    if _CURSES_IMPORT_ERROR is not None:
+        detail = f"{detail} ({_CURSES_IMPORT_ERROR})"
+    if os.name == "nt":
+        detail = (
+            f"{detail}\n"
+            "Windows support requires the bundled `windows-curses` dependency. "
+            "Reinstall Dexter with `python -m pip install .` or install it directly with "
+            "`python -m pip install windows-curses`."
+        )
+    return False, detail
 
 
 def _clear_terminal() -> None:
@@ -6487,6 +6513,13 @@ class InteractiveDexterCLI:
             self._show_help()
 
     def run(self) -> int:
+        tui_ready, tui_message = _tui_available()
+        if not tui_ready:
+            if tui_message:
+                print(tui_message)
+                print("The command-line interface is still available with `dexter help`.")
+            return 1
+
         def _wrapped(stdscr) -> int:
             self._init_screen(stdscr)
             self._show_splash_tui()
@@ -6502,8 +6535,27 @@ class InteractiveDexterCLI:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
-    if not args or (args and args[0] in {"cli", "menu", "interactive"}):
+    if args and args[0] == "cli":
+        import dexter_cli as dexter_commands
+
+        cli_args = args[1:]
+        if not cli_args:
+            parser = dexter_commands.build_parser()
+            parser.print_help()
+            return 0
+        return int(dexter_commands.legacy_main(cli_args))
+
+    if not args or (args and args[0] in {"menu", "interactive"}):
         if not _interactive_terminal():
+            import dexter_cli as dexter_commands
+
+            parser = dexter_commands.build_parser()
+            parser.print_help()
+            return 1
+        tui_ready, tui_message = _tui_available()
+        if not tui_ready:
+            if tui_message:
+                print(tui_message)
             import dexter_cli as dexter_commands
 
             parser = dexter_commands.build_parser()
