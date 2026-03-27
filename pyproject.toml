@@ -30,6 +30,7 @@ dexter = "Dexter:main"
 py-modules = [
     "Dexter",
     "database",
+    "database_setup",
     "dexter_alerts",
     "dexter_cli",
     "dexter_config",

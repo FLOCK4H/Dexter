@@ -84,15 +84,35 @@ python -m pip install -e .
 Copy-Item .env.example .env
 ```
 
+Windows PostgreSQL one-command setup:
+
+```powershell
+dexter database-setup
+```
+
+Windows may show a UAC prompt while Dexter installs PostgreSQL or starts the PostgreSQL service.
+
+If you prefer a script from the repo root instead of the CLI command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install_postgres_windows.ps1
+```
+
 Minimum setup before running Dexter seriously:
 
-- database: set `DATABASE_URL` or the `DB_*` variables
-- bootstrap admin: set `POSTGRES_ADMIN_DSN` or `POSTGRES_ADMIN_*` if Dexter needs to create the DB, user, or schema
+- database: on Windows, `dexter database-setup` writes `DATABASE_URL`, `DB_*`, `POSTGRES_ADMIN_*`, and the local `pg_dump.exe` path for you
+- bootstrap admin: if you skip `database-setup`, set `POSTGRES_ADMIN_DSN` or `POSTGRES_ADMIN_*` when Dexter needs to create the DB, user, or schema
 - wallet: set `PRIVATE_KEY` or `DEXTER_TRADING_PRIVATE_KEY` for `simulate`, `live`, or on-chain `create`
 - mainnet RPC: set `HTTP_URL` and `WS_URL`
 - safety gates: leave `DEXTER_MAINNET_DRY_RUN=true` and `DEXTER_ALLOW_MAINNET_LIVE=false` until you intentionally want live mainnet sends
 
 Bootstrap the database when needed:
+
+```bash
+dexter database-setup
+```
+
+If PostgreSQL is already installed and running, or if you're on Linux/macOS and only need Dexter's schema:
 
 ```bash
 dexter database-init
@@ -353,11 +373,28 @@ Args:
 
 ### `dexter database-init`
 
-Bootstrap Dexter's PostgreSQL database and tables.
+Bootstrap Dexter's PostgreSQL database and tables after PostgreSQL itself is already installed and reachable.
 
 Args:
 
 - `--network {devnet,mainnet}`: config-resolution override; the work itself is local PostgreSQL bootstrap
+
+### `dexter database-setup`
+
+Install and configure local PostgreSQL for Dexter on Windows, update `.env`, and run Dexter's schema bootstrap automatically.
+
+Args:
+
+- `--network {devnet,mainnet}`: optional Dexter config override
+- `--major-version <n>`: WinGet PostgreSQL major version to install when PostgreSQL is missing
+- `--admin-password <password>`: local `postgres` superuser password; defaults to `postgres` for WinGet installs
+- `--db-user <name>`: Dexter application role name
+- `--db-password <password>`: Dexter application role password
+- `--db-name <name>`: Dexter application database name
+- `--db-host <host>`: local PostgreSQL host
+- `--db-port <port>`: local PostgreSQL port
+- `--skip-install`: skip WinGet and assume PostgreSQL is already installed locally
+- `--dry-run`: print the install and setup actions without changing the machine
 
 ## The TUI Settings Pages
 

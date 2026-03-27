@@ -23,7 +23,30 @@ Component = Literal["collector", "trader", "doctor", "database", "analyze"]
 ExecutionMode = Literal["read_only", "paper", "simulate", "live"]
 NetworkName = Literal["mainnet", "devnet"]
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+CODE_ROOT = Path(__file__).resolve().parent
+
+
+def _looks_like_workspace(path: Path) -> bool:
+    return (
+        path.is_dir()
+        and (path / ".env.example").exists()
+        and ((path / "Dexter.py").exists() or (path / "pyproject.toml").exists())
+    )
+
+
+def _resolve_project_root() -> Path:
+    override = os.getenv("DEXTER_HOME") or os.getenv("DEXTER_PROJECT_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+
+    cwd = Path.cwd()
+    if _looks_like_workspace(cwd):
+        return cwd.resolve()
+
+    return CODE_ROOT
+
+
+PROJECT_ROOT = _resolve_project_root()
 ENV_PATH = PROJECT_ROOT / ".env"
 DEFAULT_BACKUP_DIR = PROJECT_ROOT.parent / "dexter_backups"
 VALID_RUNTIME_MODES = {"read_only", "paper", "simulate", "live"}
@@ -546,10 +569,12 @@ def validate_config(config: AppConfig, component: Component) -> tuple[list[str],
         errors.append("DATABASE_URL or DB_* variables are required.")
 
     if component == "database":
-        if not config.database.admin_dsn:
-            errors.append("POSTGRES_ADMIN_DSN or POSTGRES_ADMIN_* variables are required for database bootstrap.")
         if not config.database.dsn:
             errors.append("DATABASE_URL or DB_* variables are required for the Dexter app database.")
+        if not config.database.admin_dsn:
+            warnings.append(
+                "POSTGRES_ADMIN_DSN or POSTGRES_ADMIN_* variables are only required when Dexter must create the database or user."
+            )
 
     if component == "trader":
         if execution_mode in {"simulate", "live"} and not config.rpc.private_key:

@@ -393,7 +393,21 @@ def run_analyze(args: argparse.Namespace) -> int:
 def run_database_init(args: argparse.Namespace) -> int:
     from database import run as run_database_runtime
 
-    return run_database_runtime(network_override=getattr(args, "network", None))
+    try:
+        return run_database_runtime(network_override=getattr(args, "network", None))
+    except Exception as exc:
+        print(f"[{current_utc_timestamp()}] FAIL  Database init: {exc}")
+        return 1
+
+
+def run_database_setup(args: argparse.Namespace) -> int:
+    from database_setup import run_windows_setup
+
+    try:
+        return int(run_windows_setup(args))
+    except Exception as exc:
+        print(f"[{current_utc_timestamp()}] FAIL  Database setup: {exc}")
+        return 1
 
 
 def _sol_to_lamports(value: float | None) -> int:
@@ -1051,6 +1065,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Dexter runtime tooling. Use `dexter help` or `dexter help <command>` for guided command help.",
         epilog=(
             "Examples:\n"
+            "  dexter database-setup\n"
             "  dexter run --network devnet --mode paper\n"
             "  dexter create --network devnet --mode paper --mint <mint> --owner <owner> --buy-price 0.000000041 --token-balance 123456\n"
             "  dexter create --network devnet --mode simulate --name DexterTest --symbol DXT --uri https://example.invalid/token.json --buy-sol 0.01\n"
@@ -1214,7 +1229,20 @@ def build_parser() -> argparse.ArgumentParser:
     control.add_argument("--reason", default="operator_force_sell", help="Optional reason for force-sell.")
     control.set_defaults(handler=run_control_command)
 
-    database_init = subparsers.add_parser("database-init", help="Bootstrap the Dexter database and tables.")
+    database_setup = subparsers.add_parser("database-setup", help="Install and configure local PostgreSQL for Dexter on Windows.")
+    database_setup.add_argument("--network", choices=["devnet", "mainnet"], help="Optional Dexter network override for config loading.")
+    database_setup.add_argument("--major-version", default="17", help="WinGet PostgreSQL major version to install when PostgreSQL is missing.")
+    database_setup.add_argument("--admin-password", help="Local postgres superuser password. Defaults to `postgres` for WinGet installs.")
+    database_setup.add_argument("--db-user", help="Dexter application database user. Defaults to DB_USER or dexter_user.")
+    database_setup.add_argument("--db-password", help="Dexter application database password. Defaults to DB_PASSWORD or a generated value.")
+    database_setup.add_argument("--db-name", help="Dexter application database name. Defaults to DB_NAME or dexter_db.")
+    database_setup.add_argument("--db-host", help="Local PostgreSQL host. Defaults to DB_HOST or 127.0.0.1.")
+    database_setup.add_argument("--db-port", type=int, help="Local PostgreSQL port. Defaults to DB_PORT or 5432.")
+    database_setup.add_argument("--skip-install", action="store_true", help="Do not run WinGet; assume PostgreSQL is already installed locally.")
+    database_setup.add_argument("--dry-run", action="store_true", help="Print the intended install/setup actions without changing the machine.")
+    database_setup.set_defaults(handler=run_database_setup)
+
+    database_init = subparsers.add_parser("database-init", help="Bootstrap the Dexter database and tables after PostgreSQL is already installed.")
     database_init.add_argument("--network", choices=["devnet", "mainnet"], help="Override DEXTER_NETWORK for this command.")
     database_init.set_defaults(handler=run_database_init)
 

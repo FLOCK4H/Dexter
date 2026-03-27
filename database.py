@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import asyncpg
 
@@ -14,6 +15,25 @@ def _quote_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _connection_help(config, exc: Exception, *, admin: bool) -> str:
+    host = config.database.admin_host if admin else config.database.host
+    port = config.database.admin_port if admin else config.database.port
+    role = config.database.admin_user if admin else config.database.user
+    target = "PostgreSQL admin connection" if admin else "Dexter app database"
+    message = (
+        f"Unable to reach the {target} at {host}:{port} as {role}: {exc}. "
+        "Make sure PostgreSQL is installed, the local PostgreSQL service is running, and the configured password is correct."
+    )
+    if os.name == "nt":
+        message = (
+            f"{message} On Windows, the easiest fix is `dexter database-setup`, "
+            "or rerun it with `--admin-password <your-local-postgres-password>` if PostgreSQL is already installed."
+        )
+    else:
+        message = f"{message} On Linux, run `./install_postgre.sh` if PostgreSQL is not installed yet."
+    return message
+
+
 async def initialize_db(mode_override: str | None = None, network_override: str | None = None):
     config = load_config(mode_override, network_override=network_override)
     errors, warnings = validate_config(config, "database")
@@ -25,37 +45,56 @@ async def initialize_db(mode_override: str | None = None, network_override: str 
     ensure_directories(config)
     log_startup_summary(__import__("logging").getLogger("dexter.database"), config, "database")
 
-    admin_conn = await asyncpg.connect(config.database.admin_dsn)
+    conn = None
     try:
-        await admin_conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED;")
-        await admin_conn.execute("COMMIT")
+        conn = await asyncpg.connect(config.database.dsn)
+        print(f"Database '{config.database.name}' is already reachable; continuing with schema bootstrap.")
+    except Exception:
+        conn = None
 
-        user_exists = await admin_conn.fetchval(
-            "SELECT 1 FROM pg_roles WHERE rolname = $1;",
-            config.database.user,
-        )
-        if not user_exists:
-            await admin_conn.execute(
-                f"CREATE USER {_quote_ident(config.database.user)} "
-                f"WITH PASSWORD {_quote_literal(config.database.password)};"
+    if conn is None:
+        if not config.database.admin_dsn:
+            raise RuntimeError(
+                "POSTGRES_ADMIN_DSN or POSTGRES_ADMIN_* variables are required when Dexter needs to create the database or user."
             )
-            print(f"User '{config.database.user}' created.")
-
-        db_exists = await admin_conn.fetchval(
-            "SELECT 1 FROM pg_database WHERE datname = $1;",
-            config.database.name,
-        )
-        if not db_exists:
+        try:
+            admin_conn = await asyncpg.connect(config.database.admin_dsn)
+        except Exception as exc:
+            raise RuntimeError(_connection_help(config, exc, admin=True)) from exc
+        try:
+            await admin_conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED;")
             await admin_conn.execute("COMMIT")
-            await admin_conn.execute(
-                f"CREATE DATABASE {_quote_ident(config.database.name)} "
-                f"OWNER {_quote_ident(config.database.user)};"
-            )
-            print(f"Database '{config.database.name}' created.")
-    finally:
-        await admin_conn.close()
 
-    conn = await asyncpg.connect(config.database.dsn)
+            user_exists = await admin_conn.fetchval(
+                "SELECT 1 FROM pg_roles WHERE rolname = $1;",
+                config.database.user,
+            )
+            if not user_exists:
+                await admin_conn.execute(
+                    f"CREATE USER {_quote_ident(config.database.user)} "
+                    f"WITH PASSWORD {_quote_literal(config.database.password)};"
+                )
+                print(f"User '{config.database.user}' created.")
+
+            db_exists = await admin_conn.fetchval(
+                "SELECT 1 FROM pg_database WHERE datname = $1;",
+                config.database.name,
+            )
+            if not db_exists:
+                await admin_conn.execute("COMMIT")
+                await admin_conn.execute(
+                    f"CREATE DATABASE {_quote_ident(config.database.name)} "
+                    f"OWNER {_quote_ident(config.database.user)};"
+                )
+                print(f"Database '{config.database.name}' created.")
+        finally:
+            await admin_conn.close()
+
+        try:
+            conn = await asyncpg.connect(config.database.dsn)
+        except Exception as exc:
+            raise RuntimeError(_connection_help(config, exc, admin=False)) from exc
+
     try:
         await conn.execute(
             """
