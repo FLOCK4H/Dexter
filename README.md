@@ -6,7 +6,7 @@ https://github.com/user-attachments/assets/6a09fae0-ad94-4ab0-a385-b870280d963e
 
 
 
-Dexter 3.0 is a TUI Solana app for Pump.fun and PumpSwap. **Main function is to gather Pump.fun creators and see how their tokens perform by running calculations with an algorithm, then composing a leaderboard out of creators. It monitors Pump.fun for new tokens, buys if creator of the token is in leaderboard.** The main surface is the interactive `dexter` menu: it edits the whole `.env`, onboards missing settings, launches runtime flows, handles create and manage workflows, and exposes operator controls without leaving the terminal. The CLI mirrors the same surface for automation and precise manual runs.
+Dexter 3.0 is a TUI Solana app for Pump.fun and PumpSwap. Here you can create Pump.fun tokens, but... **Main function is to gather Pump.fun creators and see how their tokens perform by running calculations with an algorithm, then composing a leaderboard out of creators. It monitors Pump.fun for new tokens, buys if creator of the token is in leaderboard.** The main surface is the interactive `dexter` menu: it edits the whole `.env`, onboards missing settings, launches runtime flows, handles create and manage workflows, and exposes operator controls without leaving the terminal. The CLI mirrors the same surface for automation and precise manual runs.
 
 Windows note: Dexter's TUI uses `curses`. `pip install .` now installs `windows-curses` automatically on Windows, and if the TUI dependency is unavailable Dexter falls back to CLI help instead of crashing during import.
 
@@ -71,6 +71,7 @@ python3 -m venv env
 source env/bin/activate
 pip install -r req.txt
 pip install -e .
+./install_postgre.sh
 cp .env.example .env
 ```
 
@@ -81,6 +82,7 @@ py -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r req.txt
 python -m pip install -e .
+dexter database-setup
 Copy-Item .env.example .env
 ```
 
