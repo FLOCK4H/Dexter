@@ -10,7 +10,7 @@ dist/
 *.egg-info/
 AGENTS.md
 PRD.md
-/.autonomous/
+/.autonomous/db-size-maintenance
 
 postgres_backup*
 /solana-dev-kit
