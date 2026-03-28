@@ -9,7 +9,6 @@ from solders.instruction import AccountMeta, Instruction # type: ignore
 from solders.signature import Signature # type: ignore
 from spl.token.constants import TOKEN_PROGRAM_ID
 from spl.token.instructions import (
-    create_idempotent_associated_token_account,
     get_associated_token_address,
 )
 import base58
@@ -31,6 +30,10 @@ try:
     from ..utils import DEFAULT_PRIORITY_FEE_CLAMP_COMPUTE_UNITS
 except Exception:
     from DexLab.utils import DEFAULT_PRIORITY_FEE_CLAMP_COMPUTE_UNITS
+try:
+    from ..utils import create_compatible_idempotent_associated_token_account
+except Exception:
+    from DexLab.utils import create_compatible_idempotent_associated_token_account
 try:
     from ...dexter_mev import MevConfig, build_mev_tip_instruction, submit_signed_transaction_via_mev
 except Exception:
@@ -952,11 +955,11 @@ class PumpFun:
         
         if not ata_exists:
             instructions.append(
-                create_idempotent_associated_token_account(
+                create_compatible_idempotent_associated_token_account(
                     payer=owner,
                     owner=owner,
                     mint=mint_address,
-                    token_program_id=token_program_id
+                    token_program_id=token_program_id,
                 )
             )
 
@@ -1113,7 +1116,7 @@ class PumpFun:
                 global_state=global_state,
             )
             instructions.append(
-                create_idempotent_associated_token_account(
+                create_compatible_idempotent_associated_token_account(
                     payer=payer,
                     owner=payer,
                     mint=mint,

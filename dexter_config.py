@@ -118,6 +118,10 @@ class DataStoreConfig:
     enabled: bool
     raw_event_retention_days: int
     export_dir: Path
+    mint_snapshot_interval_seconds: int
+    mint_snapshot_retention_per_mint: int
+    maintenance_interval_seconds: int
+    max_database_size_bytes: int
 
 
 Phase2Config = DataStoreConfig
@@ -492,6 +496,10 @@ def load_config(mode_override: str | None = None, network_override: str | None =
             export_dir=Path(
                 _env("DEXTER_DATASTORE_EXPORT_DIR", str(PROJECT_ROOT / "dev" / "exports"))
             ).expanduser(),
+            mint_snapshot_interval_seconds=_env_int("DEXTER_DATASTORE_MINT_SNAPSHOT_INTERVAL_SECONDS", 15),
+            mint_snapshot_retention_per_mint=_env_int("DEXTER_DATASTORE_MINT_SNAPSHOT_RETENTION_PER_MINT", 4),
+            maintenance_interval_seconds=_env_int("DEXTER_DATASTORE_MAINTENANCE_INTERVAL_SECONDS", 60),
+            max_database_size_bytes=_env_int("DEXTER_DATASTORE_MAX_DATABASE_SIZE_BYTES", 2147483648),
         ),
         risk=RiskConfig(
             per_trade_sol_cap=_env_decimal("DEXTER_PER_TRADE_SOL_CAP", "100.00"),
@@ -622,6 +630,14 @@ def validate_config(config: AppConfig, component: Component) -> tuple[list[str],
 
     if config.phase2.enabled and config.phase2.raw_event_retention_days < 1:
         errors.append("DEXTER_DATASTORE_RAW_EVENT_RETENTION_DAYS must be at least 1.")
+    if config.phase2.enabled and config.phase2.mint_snapshot_interval_seconds < 1:
+        errors.append("DEXTER_DATASTORE_MINT_SNAPSHOT_INTERVAL_SECONDS must be at least 1.")
+    if config.phase2.enabled and config.phase2.mint_snapshot_retention_per_mint < 1:
+        errors.append("DEXTER_DATASTORE_MINT_SNAPSHOT_RETENTION_PER_MINT must be at least 1.")
+    if config.phase2.enabled and config.phase2.maintenance_interval_seconds < 10:
+        errors.append("DEXTER_DATASTORE_MAINTENANCE_INTERVAL_SECONDS must be at least 10.")
+    if config.phase2.enabled and config.phase2.max_database_size_bytes < 0:
+        errors.append("DEXTER_DATASTORE_MAX_DATABASE_SIZE_BYTES must be >= 0.")
 
     if config.risk.per_trade_sol_cap <= 0:
         errors.append("DEXTER_PER_TRADE_SOL_CAP must be > 0.")

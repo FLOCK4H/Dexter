@@ -64,26 +64,37 @@ class DexBetterLogs:
         self.last_event_at = None
         self.last_error = None
         self.last_integrity_check_at = None
+        self.last_storage_maintenance_at = None
+        self.last_storage_maintenance = {}
         self.current_status = "idle"
 
     async def publish_snapshot(self, *, status: str):
         self.current_status = status
         if not self.app_config:
-            return
-        publish_runtime_snapshot(
-            self.app_config.paths.collector_snapshot_file,
-            {
-                "component": "collector",
-                "status": status,
-                "network": self.app_config.runtime.network,
-                "subscribed": self.subscribed,
-                "processed_logs": self.processed_logs,
-                "queue_depth": self.logs.qsize(),
-                "last_event_at": self.last_event_at,
-                "last_integrity_check_at": self.last_integrity_check_at,
-                "last_error": self.last_error,
-            },
-        )
+            return False
+        snapshot = {
+            "component": "collector",
+            "status": status,
+            "network": self.app_config.runtime.network,
+            "subscribed": self.subscribed,
+            "processed_logs": self.processed_logs,
+            "queue_depth": self.logs.qsize(),
+            "last_event_at": self.last_event_at,
+            "last_integrity_check_at": self.last_integrity_check_at,
+            "last_storage_maintenance_at": self.last_storage_maintenance_at,
+            "storage_maintenance": self.last_storage_maintenance,
+            "last_error": self.last_error,
+        }
+        try:
+            await asyncio.to_thread(
+                publish_runtime_snapshot,
+                self.app_config.paths.collector_snapshot_file,
+                snapshot,
+            )
+            return True
+        except Exception:
+            logging.exception("Collector runtime snapshot publish failed unexpectedly.")
+            return False
 
     def setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown."""
@@ -356,9 +367,33 @@ class DexBetterLogs:
         if self.app_config is None:
             return
         while not self.stop_event.is_set():
-            await self.publish_snapshot(status="running" if not self.stop_event.is_set() else "stopped")
+            try:
+                await self.publish_snapshot(status="running" if not self.stop_event.is_set() else "stopped")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logging.exception("Collector snapshot loop iteration failed.")
             try:
                 await asyncio.wait_for(self.stop_event.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                continue
+
+    async def storage_maintenance_loop(self):
+        if self.market is None or self.app_config is None:
+            return
+        interval_seconds = self.app_config.phase2.maintenance_interval_seconds
+        while not self.stop_event.is_set():
+            try:
+                report = await self.market.reconcile_mint_storage(force=False)
+                self.last_storage_maintenance_at = dt.datetime.now(dt.timezone.utc).isoformat()
+                self.last_storage_maintenance = report
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.last_error = str(exc)
+                logging.exception("Collector storage maintenance loop failed.")
+            try:
+                await asyncio.wait_for(self.stop_event.wait(), timeout=interval_seconds)
             except asyncio.TimeoutError:
                 continue
 
@@ -375,6 +410,7 @@ class DexBetterLogs:
                 asyncio.create_task(self.subscribe(PUMP_FUN), name="collector.subscribe"),
                 asyncio.create_task(self.market_handler(), name="collector.market_handler"),
                 asyncio.create_task(self.monitor_integrity_and_backup(), name="collector.monitor"),
+                asyncio.create_task(self.storage_maintenance_loop(), name="collector.maintenance"),
                 asyncio.create_task(self.publish_runtime_snapshot_loop(), name="collector.snapshot"),
             }
             await asyncio.gather(*self.run_tasks)

@@ -2,11 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import threading
+import time
 from typing import Any
+from uuid import uuid4
+
+
+logger = logging.getLogger(__name__)
+
+_WINDOWS_FILE_ACCESS_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.5)
+_WINDOWS_FILE_ACCESS_WINERRORS = {5, 32}
+_RUNTIME_SNAPSHOT_WARNING_INTERVAL_SECONDS = 30.0
+_path_write_locks: dict[str, threading.Lock] = {}
+_path_write_locks_guard = threading.Lock()
+_runtime_snapshot_warning_times: dict[str, float] = {}
+_runtime_snapshot_warning_guard = threading.Lock()
 
 
 def _json_safe(value: Any) -> Any:
@@ -28,11 +43,64 @@ def _read_json_file(path: Path, default: Any) -> Any:
         return default
 
 
+def _path_lock_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+def _get_path_write_lock(path: Path) -> threading.Lock:
+    key = _path_lock_key(path)
+    with _path_write_locks_guard:
+        lock = _path_write_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _path_write_locks[key] = lock
+        return lock
+
+
+def _is_retryable_windows_file_access_error(exc: BaseException) -> bool:
+    return (
+        os.name == "nt"
+        and isinstance(exc, OSError)
+        and getattr(exc, "winerror", None) in _WINDOWS_FILE_ACCESS_WINERRORS
+    )
+
+
+def _replace_with_retry(temp_path: Path, path: Path) -> None:
+    for delay in _WINDOWS_FILE_ACCESS_RETRY_DELAYS:
+        try:
+            temp_path.replace(path)
+            return
+        except OSError as exc:
+            if not _is_retryable_windows_file_access_error(exc):
+                raise
+            time.sleep(delay)
+    temp_path.replace(path)
+
+
+def _should_log_runtime_snapshot_warning(path: Path) -> bool:
+    key = _path_lock_key(path)
+    now = time.monotonic()
+    with _runtime_snapshot_warning_guard:
+        last_logged_at = _runtime_snapshot_warning_times.get(key)
+        if last_logged_at is not None and (now - last_logged_at) < _RUNTIME_SNAPSHOT_WARNING_INTERVAL_SECONDS:
+            return False
+        _runtime_snapshot_warning_times[key] = now
+        return True
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(_json_safe(payload), indent=2, sort_keys=True), encoding="utf-8")
-    temp_path.replace(path)
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid4().hex}.tmp")
+    rendered = json.dumps(_json_safe(payload), indent=2, sort_keys=True)
+    with _get_path_write_lock(path):
+        try:
+            temp_path.write_text(rendered, encoding="utf-8")
+            _replace_with_retry(temp_path, path)
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 class RuntimeStateWriter:
@@ -112,7 +180,18 @@ def save_control_state(path: Path, state: dict[str, Any]) -> dict[str, Any]:
 
 
 def publish_runtime_snapshot(path: Path, snapshot: dict[str, Any]) -> None:
-    _atomic_write_json(path, snapshot)
+    try:
+        _atomic_write_json(path, snapshot)
+    except OSError as exc:
+        if _is_retryable_windows_file_access_error(exc):
+            if _should_log_runtime_snapshot_warning(path):
+                logger.warning(
+                    "Skipping runtime snapshot update for %s because the file is temporarily locked: %s",
+                    path,
+                    exc,
+                )
+            return
+        raise
 
 
 def _line_set(path: Path) -> set[str]:

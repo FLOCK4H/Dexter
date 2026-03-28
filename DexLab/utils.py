@@ -5,6 +5,15 @@ from decimal import Decimal, ROUND_CEILING
 from typing import Any
 
 from aiohttp import ClientSession, ClientTimeout
+from solders.instruction import AccountMeta, Instruction  # type: ignore
+from solders.pubkey import Pubkey as PublicKey  # type: ignore
+from spl.token.constants import TOKEN_PROGRAM_ID
+from spl.token.instructions import (
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+    SYS_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID,
+    get_associated_token_address,
+)
 
 import settings as legacy_settings
 
@@ -31,6 +40,37 @@ PRIORITY_FEE_LEVEL_PERCENTILES = {
     "turbo": 0.95,
     "max": 0.99,
 }
+SUPPORTED_ASSOCIATED_TOKEN_PROGRAM_IDS = {
+    PublicKey.from_string(str(TOKEN_PROGRAM_ID)),
+    PublicKey.from_string(str(TOKEN_2022_PROGRAM_ID)),
+}
+
+
+def create_compatible_idempotent_associated_token_account(
+    *,
+    payer: PublicKey,
+    owner: PublicKey,
+    mint: PublicKey,
+    token_program_id: PublicKey = PublicKey.from_string(str(TOKEN_PROGRAM_ID)),
+) -> Instruction:
+    if token_program_id not in SUPPORTED_ASSOCIATED_TOKEN_PROGRAM_IDS:
+        raise ValueError(
+            "token_program_id must be one of TOKEN_PROGRAM_ID or TOKEN_2022_PROGRAM_ID."
+        )
+
+    associated_token_address = get_associated_token_address(owner, mint, token_program_id)
+    return Instruction(
+        accounts=[
+            AccountMeta(pubkey=payer, is_signer=True, is_writable=True),
+            AccountMeta(pubkey=associated_token_address, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=owner, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=mint, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=SYS_PROGRAM_ID, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=token_program_id, is_signer=False, is_writable=False),
+        ],
+        program_id=ASSOCIATED_TOKEN_PROGRAM_ID,
+        data=bytes([1]),
+    )
 
 
 async def usd_to_lamports(usd_amount: float, sol_price_usd: Decimal) -> int:

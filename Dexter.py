@@ -1570,8 +1570,15 @@ class Dexter:
         pruned_force_sell_mints = [mint for mint in force_sell_mints if mint in tracked_mints]
         if pruned_force_sell_mints != force_sell_mints:
             control["force_sell_mints"] = pruned_force_sell_mints
-            self.operator_state = save_control_state(self.config.paths.operator_control_file, control)
-            control = self.operator_state
+            try:
+                self.operator_state = await asyncio.to_thread(
+                    save_control_state,
+                    self.config.paths.operator_control_file,
+                    control,
+                )
+                control = self.operator_state
+            except Exception:
+                logging.exception("Unable to persist operator control state while publishing the trader snapshot.")
         sessions = []
         for mint_id, task in self.active_sessions.items():
             holding = self.holdings.get(mint_id, {})
@@ -1631,11 +1638,23 @@ class Dexter:
             "recent_failures": list(self.recent_failures),
         }
         self._sync_all_managed_positions()
-        publish_runtime_snapshot(self.config.paths.trader_snapshot_file, snapshot)
+        try:
+            await asyncio.to_thread(
+                publish_runtime_snapshot,
+                self.config.paths.trader_snapshot_file,
+                snapshot,
+            )
+        except Exception:
+            logging.exception("Trader runtime snapshot publish failed unexpectedly.")
 
     async def _publish_runtime_snapshot_loop(self):
         while not self.stop_event.is_set():
-            await self._publish_runtime_snapshot()
+            try:
+                await self._publish_runtime_snapshot()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logging.exception("Trader snapshot loop iteration failed.")
             try:
                 await asyncio.wait_for(self.stop_event.wait(), timeout=5)
             except asyncio.TimeoutError:
@@ -3032,9 +3051,25 @@ class Dexter:
             return tx_id
         
         except Exception as e:
+            self._release_buy_spend(mint_id)
+            self.holdings.pop(mint_id, None)
+            if self.phase2 is not None and order_id is not None:
+                await self.phase2.update_order(
+                    order_id,
+                    status="failed",
+                    context={"exception": str(e)},
+                )
+                await self._phase2_close_position_journal(
+                    mint_id=mint_id,
+                    status="failed",
+                    exit_reason="buy_exception",
+                    context={"exception": str(e)},
+                )
+            await self._phase2_record_risk_event(mint_id, owner, "buy_failed", "error", str(e))
             logging.error(f"Buy transaction failed: {e}")
             traceback.print_exc()
             await self._record_runtime_failure(mint_id, owner, f"buy exception: {e}")
+            return "buy_failed"
 
     async def sell(self, mint_id, amount, reason, owner, trust_level, buy_price):
         try:
@@ -3609,6 +3644,10 @@ class Dexter:
                         if result == "PriceTooHigh":
                             logging.info(f"{cc.RED}Ending session for {mint_id} due to high buy price.{cc.RESET}")
                             await self._phase2_close_session(mint_id, status="closed", reason="PriceTooHigh")
+                            break
+                        if result in {None, "buy_failed"}:
+                            logging.info(f"{cc.RED}Ending session for {mint_id} because the buy attempt failed.{cc.RESET}")
+                            await self._phase2_close_session(mint_id, status="failed", reason="buy_failed")
                             break
                         if result in {"read_only", "emergency_stop", "spend_cap_exceeded", "risk_control", "strategy_v2_blocked"}:
                             await self._phase2_close_session(mint_id, status="blocked", reason=result)

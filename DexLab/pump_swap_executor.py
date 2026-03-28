@@ -20,7 +20,6 @@ from spl.token.constants import TOKEN_PROGRAM_ID
 from spl.token.instructions import (
     CloseAccountParams,
     close_account,
-    create_idempotent_associated_token_account,
     get_associated_token_address,
 )
 
@@ -32,6 +31,10 @@ try:
     from .utils import DEFAULT_PRIORITY_FEE_CLAMP_COMPUTE_UNITS
 except Exception:
     from DexLab.utils import DEFAULT_PRIORITY_FEE_CLAMP_COMPUTE_UNITS
+try:
+    from .utils import create_compatible_idempotent_associated_token_account
+except Exception:
+    from DexLab.utils import create_compatible_idempotent_associated_token_account
 try:
     from ..dexter_mev import MevConfig, build_mev_tip_instruction, submit_signed_transaction_via_mev
 except Exception:
@@ -315,7 +318,7 @@ class PumpSwapExecutor:
                 instructions.append(mev_tip_ix)
 
         instructions.append(
-            create_idempotent_associated_token_account(
+            create_compatible_idempotent_associated_token_account(
                 payer=user,
                 owner=user,
                 mint=quote_mint,

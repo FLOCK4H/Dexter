@@ -69,6 +69,33 @@ def _finite_float(value, default=None):
         return default
     return result
 
+
+def _normalize_holder_balances(value):
+    payload = _parse_json_blob(value, {})
+    normalized = {}
+    if isinstance(payload, dict):
+        for wallet, details in payload.items():
+            if not wallet:
+                continue
+            if isinstance(details, dict):
+                normalized[str(wallet)] = max(0.0, _finite_float(details.get("balance"), 0.0) or 0.0)
+                continue
+            normalized[str(wallet)] = max(0.0, _finite_float(details, 0.0) or 0.0)
+    elif isinstance(payload, list):
+        for wallet in payload:
+            if wallet:
+                normalized[str(wallet)] = 0.0
+    return normalized
+
+
+def _price_history_last_timestamp(price_history):
+    if not price_history:
+        return 0
+    try:
+        return max(int(str(raw_key).split(".")[0]) for raw_key in price_history.keys())
+    except Exception:
+        return 0
+
 class Market:
     def __init__(self, session, serializer, stop_event, db_dsn, parent=None, app_config=None):
         self.session = session
@@ -93,6 +120,8 @@ class Market:
         self.count_iter = 0
         self.sema = asyncio.Semaphore(1000)
         self.backup_process = None
+        self.last_maintenance_at = None
+        self.last_maintenance_report = {}
 
     async def init_db(self):
         min_size = self.app_config.database.min_pool_size if self.app_config else 1
@@ -114,6 +143,7 @@ class Market:
             if not any(row['tablename'] == 'mints' for row in tables) or \
                not any(row['tablename'] == "stagnant_mints" for row in tables):
                 raise RuntimeError("Required tables not found: mints, stagnant_mints.")
+        await self.reconcile_mint_storage(force=True)
 
     async def close_db(self):
         if self.db_pool:
@@ -183,7 +213,7 @@ class Market:
                     float(data.get("age", 0)),
                     json.dumps(data.get("tx_counts", {}), cls=DecimalEncoder),
                     json.dumps({'30sec': {}, '1min': {}, '2min': {}, '5min': {}}, cls=DecimalEncoder),
-                    json.dumps(data.get("holders", {}), cls=DecimalEncoder),
+                    json.dumps(_normalize_holder_balances(data.get("holders", {})), cls=DecimalEncoder, sort_keys=True),
                     data.get("mint_sig"),
                     data.get("bonding_curve"),
                     data.get("created"),
@@ -306,7 +336,7 @@ class Market:
 
                     try:
                         tx_counts = json.loads(row['tx_counts']) if row['tx_counts'] else {'swaps': 0, 'buys': 0, 'sells': 0}
-                        holders = json.loads(row['holders']) if row['holders'] else {}
+                        holders = _normalize_holder_balances(row['holders'])
                         price_history = json.loads(row['price_history']) if row['price_history'] else {}
                         volume = json.loads(row['volume']) if row['volume'] else {
                             '30sec': {}, '1min': {}, '2min': {}, '5min': {}
@@ -353,29 +383,13 @@ class Market:
                     if user == "9BgYe7pZybM88PFKuLF6UUMv43jqMa99jaxU4EdbEnq7":
                         logging.info(f"Catched our transaction: {row}\n{event_data}")
                     token_amount = Decimal(event_data.get("token_amount", 0)) / Decimal('1e6')
-                    if user not in holders:
-                        holders[user] = {
-                            "balance": float(token_amount),
-                            "balance_changes": [{
-                                "price_was": float(row['current_price']),
-                                "amount": float(token_amount),
-                                "type": tx_type,
-                                "timestamp": current_timestamp,
-                            }]
-                        }
-                    else:
+                    if user:
+                        current_balance = float(holders.get(user, 0.0) or 0.0)
                         if tx_type == "buy":
-                            holders[user]["balance"] += float(token_amount)
+                            current_balance += float(token_amount)
                         elif tx_type == "sell":
-                            holders[user]["balance"] -= float(token_amount)
-                        holders[user]["balance_changes"].append(
-                            {
-                                "price_was": float(row['current_price']),
-                                "amount": float(token_amount),
-                                "type": tx_type,
-                                "timestamp": current_timestamp,
-                            }
-                        )
+                            current_balance -= float(token_amount)
+                        holders[user] = max(0.0, current_balance)
 
                     if self.count_iter % 100 == 0:
                         self.count_iter = 0
@@ -403,7 +417,7 @@ class Market:
                     updates = {
                         "tx_counts": json.dumps(tx_counts, cls=DecimalEncoder),
                         "volume": json.dumps(volume, cls=DecimalEncoder),
-                        "holders": json.dumps(holders, cls=DecimalEncoder),
+                        "holders": json.dumps(holders, cls=DecimalEncoder, sort_keys=True),
                         "price_history": json.dumps(price_history, cls=DecimalEncoder),
                         "current_price": float(price),
                         "high_price": float(max(high_price, price)),
@@ -682,14 +696,155 @@ class Market:
                 },
             )
 
+    def _build_stagnant_row_data(self, row, *, now=None):
+        if not isinstance(row, dict):
+            row = dict(row)
+        now = float(now or time.time())
+        price_history = _parse_json_blob(row.get("price_history"), {})
+        open_price = Decimal(str(row.get("open_price") or 0))
+        current_price = Decimal(str(row.get("current_price") or 0))
+        peak_price = self._get_peak_price(price_history)
+        peak_pct_change = 0.0
+        if peak_price > 0 and open_price > 0:
+            peak_pct_change = float(((peak_price - open_price) / open_price) * 100)
+
+        created_at = int(row.get("created") or 0)
+        last_tx_time = _price_history_last_timestamp(price_history)
+        age_since_created = max(0.0, now - created_at) if created_at else 0.0
+        last_tx_age = max(0.0, now - last_tx_time) if last_tx_time else None
+
+        price_below_threshold = current_price <= Decimal("0.0000000300")
+        no_tx_for_5_min = bool(last_tx_age is not None and last_tx_age > (5 * 60))
+        price_below_30s = bool(price_below_threshold and last_tx_age is not None and last_tx_age >= 30)
+        no_history_stale = not price_history and age_since_created >= 60
+
+        if not (no_tx_for_5_min or price_below_30s or no_history_stale):
+            return None
+
+        peak_market_cap = float(self.get_market_cap(peak_price)) if peak_price > 0 else 0.0
+        final_high = peak_price if peak_price > 0 else current_price
+        final_low = _finite_float(row.get("low_price"), _finite_float(current_price, 0.0))
+        slot_delay = row.get("age")
+        if slot_delay in (None, "", 0):
+            slot_delay = str(age_since_created)
+        else:
+            slot_delay = str(slot_delay)
+
+        return {
+            "mint_id": row["mint_id"],
+            "name": row["name"],
+            "symbol": row["symbol"],
+            "owner": row["owner"],
+            "holders": row["holders"],
+            "price_history": row["price_history"],
+            "tx_counts": row["tx_counts"],
+            "volume": row["volume"],
+            "peak_price_change": peak_pct_change,
+            "peak_market_cap": peak_market_cap,
+            "final_market_cap": row["market_cap"],
+            "final_ohlc": json.dumps(
+                {
+                    "open": row["open_price"],
+                    "high": final_high,
+                    "low": final_low,
+                    "close": current_price,
+                },
+                cls=DecimalEncoder,
+            ),
+            "mint_sig": row["mint_sig"],
+            "bonding_curve": row["bonding_curve"],
+            "slot_delay": slot_delay,
+        }
+
+    async def reconcile_mint_storage(self, *, force=False):
+        if self.db_pool is None:
+            return {
+                "moved_to_stagnant": 0,
+                "holders_compacted": 0,
+                "snapshot_rows_compacted": 0,
+                "snapshot_rows_pruned": 0,
+                "raw_event_rows_pruned": 0,
+                "db_size_bytes": 0,
+                "vacuumed": False,
+                "active_monitors": 0,
+            }
+
+        now = time.time()
+        moved_to_stagnant = 0
+        async with self.db_pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM mints ORDER BY created ASC")
+
+        for row in rows:
+            if self.stop_event.is_set():
+                break
+            row_data = self._build_stagnant_row_data(row, now=now)
+            if row_data is not None:
+                await self.move_to_stagnant_mints(row_data)
+                moved_to_stagnant += 1
+                continue
+            self.start_monitor_for_mint(row["mint_id"])
+
+        holders_compacted = await self.compact_holder_storage()
+        snapshot_rows_pruned = 0
+        snapshot_rows_compacted = 0
+        raw_event_rows_pruned = 0
+        db_size_bytes = 0
+        vacuumed = False
+        if self.phase2 is not None:
+            snapshot_rows_pruned = await self.phase2.prune_mint_snapshot_retention(force=force)
+            snapshot_rows_compacted = await self.phase2.compact_mint_snapshot_storage()
+            raw_event_rows_pruned = await self.phase2.prune_raw_event_retention(force=force)
+            db_size_bytes = await self.phase2.database_size_bytes()
+            max_db_size = int(getattr(self.app_config.phase2, "max_database_size_bytes", 0) or 0) if self.app_config else 0
+            if force or (max_db_size > 0 and db_size_bytes >= max_db_size):
+                await self.phase2.vacuum_tables(
+                    ["mints", "stagnant_mints", "phase2_mint_snapshots", "phase2_raw_events"],
+                    full=False,
+                )
+                vacuumed = True
+                db_size_bytes = await self.phase2.database_size_bytes()
+
+        self.last_maintenance_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        self.last_maintenance_report = {
+            "moved_to_stagnant": moved_to_stagnant,
+            "holders_compacted": holders_compacted,
+            "snapshot_rows_compacted": snapshot_rows_compacted,
+            "snapshot_rows_pruned": snapshot_rows_pruned,
+            "raw_event_rows_pruned": raw_event_rows_pruned,
+            "db_size_bytes": db_size_bytes,
+            "vacuumed": vacuumed,
+            "active_monitors": len(self.mint_monitor_tasks),
+        }
+        return dict(self.last_maintenance_report)
+
+    async def compact_holder_storage(self):
+        if self.db_pool is None:
+            return 0
+
+        updated = 0
+        async with self.db_pool.acquire() as conn:
+            for table_name in ("mints", "stagnant_mints"):
+                rows = await conn.fetch(
+                    f"SELECT mint_id, holders FROM {table_name}"
+                )
+                for row in rows:
+                    normalized = json.dumps(_normalize_holder_balances(row["holders"]), sort_keys=True)
+                    existing = row["holders"] or ""
+                    if existing == normalized:
+                        continue
+                    await conn.execute(
+                        f"UPDATE {table_name} SET holders = $1 WHERE mint_id = $2",
+                        normalized,
+                        row["mint_id"],
+                    )
+                    updated += 1
+        return updated
+
     async def monitor_single_mint(self, mint_id):
         """
         Monitor a single mint for stagnancy. Stop if the mint is removed
         or if conditions meet for moving it to stagnant_mints.
         """
-        peak_pct_change = 0.0
-        peak_price = 0
-        retry_ = 0
         try:
             while not self.stop_event.is_set():
                 async with self.db_pool.acquire() as conn:
@@ -699,54 +854,8 @@ class Market:
                     )
                 if not row:
                     break
-
-                current_price = Decimal(row["current_price"])
-                open_price = Decimal(row["open_price"])
-                ph = json.loads(row["price_history"] if row["price_history"] else "{}")
-
-                all_prices = [Decimal(str(val)) for val in ph.values() if val]
-                if all_prices and open_price > 0:
-                    peak_price = max(all_prices)
-                    peak_pct_change = float(((peak_price - open_price) / open_price) * 100)
-                
-                peak_market_cap = float(self.get_market_cap(peak_price)) if peak_price > 0 else 0.0
-
-                if not ph:
-                    retry_ += 1
-                    await asyncio.sleep(1)
-                    if retry_ >= 20:
-                        logging.info(f"Price history not found for mint {mint_id}.")
-                        break
-                    else:
-                        continue
-
-                # last_tx_time is the last key in price_history
-                last_tx_time = int(list(ph.keys())[-1].split('.')[0]) if ph else 0
-                now = time.time()
-
-                # Check for stagnancy
-                no_tx_for_5_min = (now - last_tx_time) > (5 * 60)  # 5 minutes
-                price_below_threshold = current_price <= Decimal('0.0000000300')
-                price_below_30s = (now - last_tx_time) >= 30 if price_below_threshold else False
-
-                if no_tx_for_5_min or price_below_30s:
-                    row_data = {
-                        "mint_id": mint_id,
-                        "name": row["name"],
-                        "symbol": row["symbol"],
-                        "owner": row["owner"],
-                        "holders": row["holders"],
-                        "price_history": row["price_history"],
-                        "tx_counts": row["tx_counts"],
-                        "volume": row["volume"],
-                        "peak_price_change": peak_pct_change,
-                        "peak_market_cap": peak_market_cap,
-                        "final_market_cap": row["market_cap"],
-                        "final_ohlc": json.dumps({"open": row["open_price"], "high": peak_price, "low": row["low_price"], "close": current_price}, cls=DecimalEncoder),
-                        "mint_sig": row["mint_sig"],
-                        "bonding_curve": row["bonding_curve"],
-                        "slot_delay": str(row["age"]),
-                    }
+                row_data = self._build_stagnant_row_data(row)
+                if row_data is not None:
                     await self.move_to_stagnant_mints(row_data)
                     break
                 await asyncio.sleep(5)

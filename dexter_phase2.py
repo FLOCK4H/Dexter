@@ -425,6 +425,57 @@ def _default_retention_days(config: Any) -> int:
     return 30
 
 
+def _default_mint_snapshot_interval_seconds(config: Any) -> int:
+    if getattr(config, "phase2", None) is not None:
+        return int(getattr(config.phase2, "mint_snapshot_interval_seconds", 15))
+    return 15
+
+
+def _default_mint_snapshot_retention_per_mint(config: Any) -> int:
+    if getattr(config, "phase2", None) is not None:
+        return int(getattr(config.phase2, "mint_snapshot_retention_per_mint", 4))
+    return 4
+
+
+def _default_maintenance_interval_seconds(config: Any) -> int:
+    if getattr(config, "phase2", None) is not None:
+        return int(getattr(config.phase2, "maintenance_interval_seconds", 60))
+    return 60
+
+
+def _default_max_database_size_bytes(config: Any) -> int:
+    if getattr(config, "phase2", None) is not None:
+        return int(getattr(config.phase2, "max_database_size_bytes", 2147483648))
+    return 2147483648
+
+
+def _container_length(value: Any) -> int:
+    if isinstance(value, (dict, list, tuple, set)):
+        return len(value)
+    return 0
+
+
+def _compact_mint_snapshot(snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    tx_counts = snapshot.get("tx_counts") or {}
+    volume = snapshot.get("volume") or {}
+    holders = snapshot.get("holders") or {}
+    price_history = snapshot.get("price_history") or {}
+    compact_payload = {
+        "mint_sig": snapshot.get("mint_sig"),
+        "created_at": snapshot.get("created_at"),
+        "holder_count": _container_length(holders),
+        "price_point_count": _container_length(price_history),
+        "swap_count": int((tx_counts or {}).get("swaps", 0) or 0) if isinstance(tx_counts, dict) else 0,
+        "buy_count": int((tx_counts or {}).get("buys", 0) or 0) if isinstance(tx_counts, dict) else 0,
+        "sell_count": int((tx_counts or {}).get("sells", 0) or 0) if isinstance(tx_counts, dict) else 0,
+        "volume_windows": sorted(str(key) for key in volume.keys()) if isinstance(volume, dict) else [],
+    }
+    sanitized_snapshot = dict(snapshot)
+    sanitized_snapshot["holders"] = {}
+    sanitized_snapshot["price_history"] = {}
+    return sanitized_snapshot, _json_safe(compact_payload)
+
+
 @dataclass(frozen=True)
 class ReplayInvariant:
     name: str
@@ -448,6 +499,9 @@ class Phase2Store:
         self.config = config
         self.pool: asyncpg.Pool | None = None
         self._last_retention_prune: dt.datetime | None = None
+        self._last_snapshot_prune: dt.datetime | None = None
+        self._last_vacuum_at: dt.datetime | None = None
+        self._last_mint_snapshot_recorded: dict[str, tuple[str, dt.datetime]] = {}
 
     def bind_pool(self, pool: asyncpg.Pool) -> None:
         self.pool = pool
@@ -621,6 +675,16 @@ class Phase2Store:
             last_event_slot=last_event_slot,
         )
 
+        recorded_at = _ensure_utc(recorded_at)
+        if not self._should_record_mint_snapshot(
+            mint_id=mint_id,
+            lifecycle_state=lifecycle_state,
+            recorded_at=recorded_at,
+        ):
+            return
+
+        compact_snapshot, compact_payload = _compact_mint_snapshot(snapshot)
+
         async def _operation(conn):
             await conn.execute(
                 """
@@ -657,29 +721,56 @@ class Phase2Store:
                 """,
                 mint_id,
                 lifecycle_state,
-                _ensure_utc(recorded_at),
-                str(snapshot.get("owner") or ""),
-                str(snapshot.get("name") or ""),
-                str(snapshot.get("symbol") or ""),
-                str(snapshot.get("bonding_curve") or ""),
-                _finite_float_or(snapshot.get("market_cap"), 0.0),
-                _finite_float_or(snapshot.get("price_usd"), 0.0),
-                _finite_float_or(snapshot.get("liquidity"), 0.0),
-                _finite_float_or(snapshot.get("open_price"), 0.0),
-                _finite_float_or(snapshot.get("high_price"), 0.0),
-                _finite_float_or(snapshot.get("low_price")),
-                _finite_float_or(snapshot.get("current_price"), 0.0),
-                _finite_float_or(snapshot.get("age"), 0.0),
-                _jsonb_param(snapshot.get("tx_counts") or {}),
-                _jsonb_param(snapshot.get("volume") or {}),
-                _jsonb_param(snapshot.get("holders") or {}),
-                _jsonb_param(snapshot.get("price_history") or {}),
+                recorded_at,
+                str(compact_snapshot.get("owner") or ""),
+                str(compact_snapshot.get("name") or ""),
+                str(compact_snapshot.get("symbol") or ""),
+                str(compact_snapshot.get("bonding_curve") or ""),
+                _finite_float_or(compact_snapshot.get("market_cap"), 0.0),
+                _finite_float_or(compact_snapshot.get("price_usd"), 0.0),
+                _finite_float_or(compact_snapshot.get("liquidity"), 0.0),
+                _finite_float_or(compact_snapshot.get("open_price"), 0.0),
+                _finite_float_or(compact_snapshot.get("high_price"), 0.0),
+                _finite_float_or(compact_snapshot.get("low_price")),
+                _finite_float_or(compact_snapshot.get("current_price"), 0.0),
+                _finite_float_or(compact_snapshot.get("age"), 0.0),
+                _jsonb_param(compact_snapshot.get("tx_counts") or {}),
+                _jsonb_param(compact_snapshot.get("volume") or {}),
+                _jsonb_param({}),
+                _jsonb_param({}),
                 last_event_fingerprint or "",
                 int(last_event_slot) if last_event_slot is not None else None,
-                _jsonb_param(snapshot),
+                _jsonb_param(compact_payload),
             )
 
         await self._with_connection(_operation)
+
+    def _should_record_mint_snapshot(
+        self,
+        *,
+        mint_id: str,
+        lifecycle_state: str,
+        recorded_at: dt.datetime,
+    ) -> bool:
+        if lifecycle_state not in {"active", "migrated"}:
+            self._last_mint_snapshot_recorded[mint_id] = (lifecycle_state, recorded_at)
+            return True
+
+        interval_seconds = _default_mint_snapshot_interval_seconds(self.config)
+        previous = self._last_mint_snapshot_recorded.get(mint_id)
+        if previous is None:
+            self._last_mint_snapshot_recorded[mint_id] = (lifecycle_state, recorded_at)
+            return True
+
+        previous_state, previous_recorded_at = previous
+        if previous_state != lifecycle_state:
+            self._last_mint_snapshot_recorded[mint_id] = (lifecycle_state, recorded_at)
+            return True
+
+        should_record = (recorded_at - previous_recorded_at) >= dt.timedelta(seconds=interval_seconds)
+        if should_record:
+            self._last_mint_snapshot_recorded[mint_id] = (lifecycle_state, recorded_at)
+        return should_record
 
     async def record_leaderboard_generation(
         self,
@@ -1524,9 +1615,19 @@ class Phase2Store:
         async def _operation(conn):
             rows = await conn.fetch(
                 """
-                SELECT mint_id, owner, lifecycle_state, current_price, market_cap, recorded_at
-                FROM phase2_mint_snapshots
-                WHERE lifecycle_state IN ('active', 'migrated')
+                SELECT *
+                FROM (
+                    SELECT DISTINCT ON (mint_id)
+                        mint_id,
+                        owner,
+                        lifecycle_state,
+                        current_price,
+                        market_cap,
+                        recorded_at
+                    FROM phase2_mint_snapshots
+                    WHERE lifecycle_state IN ('active', 'migrated')
+                    ORDER BY mint_id, recorded_at DESC, snapshot_id DESC
+                ) AS latest_mints
                 ORDER BY recorded_at DESC
                 LIMIT $1
                 """,
@@ -1574,6 +1675,108 @@ class Phase2Store:
         deleted = await self._with_connection(_operation)
         self._last_retention_prune = now
         return deleted
+
+    async def prune_mint_snapshot_retention(self, *, force: bool = False) -> int:
+        if self.config is None:
+            return 0
+
+        now = _utc_now()
+        if not force and self._last_snapshot_prune is not None:
+            interval_seconds = _default_maintenance_interval_seconds(self.config)
+            if (now - self._last_snapshot_prune) < dt.timedelta(seconds=interval_seconds):
+                return 0
+
+        keep_per_mint = _default_mint_snapshot_retention_per_mint(self.config)
+
+        async def _operation(conn):
+            result = await conn.execute(
+                """
+                WITH ranked AS (
+                    SELECT
+                        snapshot_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY mint_id, lifecycle_state
+                            ORDER BY recorded_at DESC, snapshot_id DESC
+                        ) AS rank_index
+                    FROM phase2_mint_snapshots
+                )
+                DELETE FROM phase2_mint_snapshots AS snapshots
+                USING ranked
+                WHERE snapshots.snapshot_id = ranked.snapshot_id
+                  AND ranked.rank_index > $1
+                """,
+                int(keep_per_mint),
+            )
+            return int(result.split()[-1])
+
+        deleted = await self._with_connection(_operation)
+        self._last_snapshot_prune = now
+        return deleted
+
+    async def compact_mint_snapshot_storage(self) -> int:
+        async def _operation(conn):
+            result = await conn.execute(
+                """
+                UPDATE phase2_mint_snapshots
+                SET holders = '{}'::jsonb,
+                    price_history = '{}'::jsonb,
+                    snapshot_payload = jsonb_strip_nulls(
+                        jsonb_build_object(
+                            'mint_sig', snapshot_payload->'mint_sig',
+                            'created_at', snapshot_payload->'created_at',
+                            'holder_count',
+                                CASE
+                                    WHEN jsonb_typeof(holders) = 'object' THEN (
+                                        SELECT COUNT(*) FROM jsonb_each(holders)
+                                    )
+                                    ELSE 0
+                                END,
+                            'price_point_count',
+                                CASE
+                                    WHEN jsonb_typeof(price_history) = 'object' THEN (
+                                        SELECT COUNT(*) FROM jsonb_each(price_history)
+                                    )
+                                    ELSE 0
+                                END,
+                            'swap_count', COALESCE((tx_counts->>'swaps')::int, 0),
+                            'buy_count', COALESCE((tx_counts->>'buys')::int, 0),
+                            'sell_count', COALESCE((tx_counts->>'sells')::int, 0)
+                        )
+                    )
+                WHERE holders <> '{}'::jsonb
+                   OR price_history <> '{}'::jsonb
+                   OR snapshot_payload ? 'holders'
+                   OR snapshot_payload ? 'price_history'
+                """
+            )
+            return int(result.split()[-1])
+
+        return await self._with_connection(_operation)
+
+    async def database_size_bytes(self) -> int:
+        async def _operation(conn):
+            return int(await conn.fetchval("SELECT pg_database_size(current_database())"))
+
+        return await self._with_connection(_operation)
+
+    async def vacuum_tables(self, tables: list[str], *, full: bool = False) -> None:
+        if not tables:
+            return
+
+        now = _utc_now()
+        if not full and self._last_vacuum_at is not None:
+            interval_seconds = max(300, _default_maintenance_interval_seconds(self.config))
+            if (now - self._last_vacuum_at) < dt.timedelta(seconds=interval_seconds):
+                return
+
+        vacuum_prefix = "VACUUM (FULL, ANALYZE)" if full else "VACUUM (ANALYZE)"
+
+        async def _operation(conn):
+            for table in tables:
+                await conn.execute(f"{vacuum_prefix} {table}")
+
+        await self._with_connection(_operation)
+        self._last_vacuum_at = now
 
     async def fetch_session_bundle(
         self,
