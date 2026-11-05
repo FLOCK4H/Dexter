@@ -84,6 +84,12 @@ A pending migration or uncertain RPC result keeps the position available for
 recovery. Closing Dexter preserves positions by default; automatic liquidation
 on shutdown is opt-in.
 
+<div align="center">
+
+  <img width="1048" height="547" alt="image" src="https://github.com/user-attachments/assets/7daa69b8-f9ad-4428-9327-0b7192c012e1" />
+
+</div>
+
 ## Make it yours
 
 The first section of `.env` contains the everyday controls. The same choices are
