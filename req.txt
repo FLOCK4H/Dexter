@@ -1,13 +1,2 @@
-asyncpg
-borsh_construct
-aiohttp
-base58
-websockets
-construct
-solana
-solders
-readchar
-requests
-httpx
-python-dotenv
-windows-curses; platform_system == "Windows"
+# One dependency manifest for both setup methods.
+-e .

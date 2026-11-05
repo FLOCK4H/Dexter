@@ -114,6 +114,7 @@ class Market:
         self.sol_price_usd = Decimal(self.get_solana_price_usd())
         self._sol_price_refresh_interval_seconds = 60.0
         self._last_sol_price_refresh_monotonic = 0.0
+        self._sol_price_refresh_lock = asyncio.Lock()
         self.total_supply = Decimal('1000000000')
         self.open_price = Decimal('0.0000000280')
         self.mint_locks = defaultdict(asyncio.Lock)  # One lock per mint_id
@@ -308,15 +309,18 @@ class Market:
     def get_solana_price_usd(self):
         return load_solana_price_usd(logger=logging.getLogger(__name__))
 
-    def _refresh_solana_price_if_due(self):
+    async def _refresh_solana_price_if_due(self):
         now_monotonic = time.monotonic()
         if (
             self._last_sol_price_refresh_monotonic
             and now_monotonic - self._last_sol_price_refresh_monotonic < self._sol_price_refresh_interval_seconds
         ):
             return
-        self.sol_price_usd = Decimal(self.get_solana_price_usd())
-        self._last_sol_price_refresh_monotonic = now_monotonic
+        if self._sol_price_refresh_lock.locked():
+            return  # Keep the last price while a refresh is already in flight.
+        async with self._sol_price_refresh_lock:
+            self._last_sol_price_refresh_monotonic = now_monotonic
+            self.sol_price_usd = Decimal(await asyncio.to_thread(self.get_solana_price_usd))
 
     def _decimal_to_str(self, value):
         d = 10
@@ -349,7 +353,7 @@ class Market:
                         event_data.get("timestamp"),
                         fallback=time.time(),
                     )
-                    self._refresh_solana_price_if_due()
+                    await self._refresh_solana_price_if_due()
 
                     # Determine transaction type and update tx_counts
                     tx_type = "buy" if event_data.get('is_buy', False) else "sell"

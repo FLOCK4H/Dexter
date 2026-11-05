@@ -1,0 +1,24 @@
+# Dexter
+
+> Dexter by FLOCK4H is a standalone Solana trading terminal for Pump.fun and PumpSwap, with creator research, token creation, migration-aware routing and position recovery.
+
+Canonical source: https://github.com/FLOCK4H/Dexter
+This index covers the GitHub repository and its packaged source. The included native binding supports Windows x64, CPython 3.10+, verified on Python 3.12. Normal installation needs Python and internet access; Rust and an adjacent Mamba checkout are not required. Initial mode is simulate, with mainnet transaction sending locked.
+
+## Installation and use
+
+- [Download and install](https://raw.githubusercontent.com/FLOCK4H/Dexter/main/docs/install.md): Canonical Git clone or ZIP download, Windows setup, local configuration, readiness checks, and troubleshooting.
+- [README](https://raw.githubusercontent.com/FLOCK4H/Dexter/main/README.md): Product overview, supported platform, terminal navigation, execution modes and configuration.
+- [Public configuration template](https://raw.githubusercontent.com/FLOCK4H/Dexter/main/.env.example): Launch, wallet, RPC, database and risk settings; never substitute real secrets into documentation.
+- [Command reference](https://raw.githubusercontent.com/FLOCK4H/Dexter/main/docs/commands.md): Runtime, positions, create, analysis, replay, export and database commands.
+
+## Working on the repository
+
+- [Agent instructions](https://raw.githubusercontent.com/FLOCK4H/Dexter/main/AGENTS.md): Setup commands, verification, source map and contribution constraints.
+- [Market binding maintenance](https://raw.githubusercontent.com/FLOCK4H/Dexter/main/bindings/README.md): Pinned native source, checksums, supported wheels and market-update workflow.
+- [Project metadata](https://raw.githubusercontent.com/FLOCK4H/Dexter/main/pyproject.toml): Python requirements, dependencies, version, entry points and canonical project URLs.
+
+## Optional
+
+- [Issues](https://github.com/FLOCK4H/Dexter/issues): Report installation or runtime problems with credentials redacted.
+- [CI](https://github.com/FLOCK4H/Dexter/actions): Windows dependency, binding and offline-test checks.

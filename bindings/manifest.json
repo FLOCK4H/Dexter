@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "wheels": [
+    {
+      "filename": "dexter_market_sdk-0.1.0-cp310-abi3-win_amd64.whl",
+      "sha256": "d096930e88ff0b8228016cff5f6bcd3d223838b1414467345ea33cc4ab37214d",
+      "source_commit": "1b3216c"
+    }
+  ],
+  "package": "dexter-market-sdk",
+  "module": "dexter_sdk",
+  "version": "0.1.0"
+}

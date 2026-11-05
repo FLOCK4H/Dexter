@@ -1,3 +1,4 @@
+from dexter_network import create_http_session, rpc_websocket, subscribe_program_logs
 import websockets
 import asyncio
 import json
@@ -35,7 +36,7 @@ logging.basicConfig(
 class DexBetterLogs:
     def __init__(self, rpc_endpoint, db_dsn=None, app_config=None, enable_market=True):
         self.logs = asyncio.Queue()
-        self.session = aiohttp.ClientSession()
+        self.session = create_http_session()
         self.rpc_endpoint = rpc_endpoint
         self.serializer = Interpreters()
         self.mint_data = None
@@ -157,24 +158,12 @@ class DexBetterLogs:
     async def subscribe(self, program: str = PUMP_FUN):
         while not self.stop_event.is_set():
             try:
-                async with websockets.connect(self.rpc_endpoint, ping_interval=5, ping_timeout=15) as ws:
-                    await ws.send(json.dumps(
-                        {
-                            "jsonrpc": "2.0",
-                            "method": "logsSubscribe",
-                            "id": 1,
-                            "params": [
-                                {"mentions": [program]},
-                                {"commitment": "processed"}
-                            ]
-                        }))
-                    response = json.loads(await ws.recv())
-
-                    if 'result' in response:
-                        logging.info(f"{cc.LIGHT_GRAY}Subscribed to logs successfully!{cc.RESET}")
-                        self.subscribed = True
-                        self.last_error = None
-                        await self.publish_snapshot(status="connected")
+                async with rpc_websocket(self.rpc_endpoint,label='collector:'+program) as ws:
+                    await subscribe_program_logs(ws,program)
+                    logging.info(f"{cc.LIGHT_GRAY}Subscribed to logs successfully!{cc.RESET}")
+                    self.subscribed = True
+                    self.last_error = None
+                    self.current_status = "connected"
 
                     async for message in ws:
                         if self.stop_event.is_set():
@@ -182,7 +171,9 @@ class DexBetterLogs:
                         hMessage = json.loads(message)
                         await self.logs.put([hMessage, program])
                         self.last_error = None
-                        await self.publish_snapshot(status="streaming")
+                        # Disk writes belong to the periodic snapshot task. Waiting
+                        # here backpressures frame reads, including keepalive pongs.
+                        self.current_status = "streaming"
 
             except asyncio.CancelledError:
                 break
@@ -192,10 +183,14 @@ class DexBetterLogs:
                 self.subscribed = False
                 self.last_error = str(e)
                 await self.publish_snapshot(status="error")
-                logging.error(f"{cc.RED}Error when subscribing to {program}, {e}{cc.RESET}")
-                traceback.print_exc()
+                if isinstance(e,(OSError,TimeoutError,websockets.WebSocketException)):
+                    logging.warning("Collector subscription reconnecting program=%s reason=%s",program,type(e).__name__)
+                else:
+                    logging.exception("Unexpected collector subscription failure program=%s",program)
             finally:
+                self.subscribed = False
                 if not self.stop_event.is_set():
+                    self.current_status = "reconnecting"
                     await asyncio.sleep(1)
 
     async def market_handler(self):
@@ -232,7 +227,7 @@ class DexBetterLogs:
             if clean_log:
                 self.processed_logs += 1
                 self.last_event_at = dt.datetime.now(dt.timezone.utc).isoformat()
-                await self.publish_snapshot(status="processing")
+                self.current_status = "processing"
                 is_mint = clean_log["is_mint"]
                 sig = clean_log["sig"]
                 program_data = clean_log["program_data"]
@@ -325,10 +320,10 @@ class DexBetterLogs:
             elif "Program data" in log:
                 idx = log.find("Program data: ")
                 raw_data = log[idx + len("Program data: "):]
-                if raw_data.startswith("G3K"):
-                    raw_data = self.serializer.parse_pumpfun_creation(raw_data)
-                elif raw_data.startswith("vdt"):
-                    raw_data = self.serializer.parse_pumpfun_transaction(raw_data)
+                raw_data = (
+                    self.serializer.parse_pumpfun_creation(raw_data)
+                    or self.serializer.parse_pumpfun_transaction(raw_data)
+                )
                 if not isinstance(raw_data, dict):
                     logging.debug(
                         "Skipping undecoded program data for %s at log index %s.",
@@ -368,7 +363,7 @@ class DexBetterLogs:
             return
         while not self.stop_event.is_set():
             try:
-                await self.publish_snapshot(status="running" if not self.stop_event.is_set() else "stopped")
+                await self.publish_snapshot(status=self.current_status if self.current_status != "idle" else "running")
             except asyncio.CancelledError:
                 raise
             except Exception:

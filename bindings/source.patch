@@ -1,0 +1,1738 @@
+diff --git a/.gitignore b/.gitignore
+index 0bd970a1d1cc409d1d86127f2456f91a1050a069..190739fdf3bde7b77b8f955cd0a4ee2dad5d954a 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -29,3 +29,6 @@
+ 
+ # Generated public export folder
+ /Mamba/
++*.pyd
++*.whl
++python/mamba_sdk/__pycache__/
+diff --git a/Cargo.lock b/Cargo.lock
+index 16965ab4cadcdd376c0debb2843ff54c2eea26d7..444a1db44f54afae1f3ac24b843a79902070d1d7 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3356,6 +3356,7 @@ dependencies = [
+  "once_cell",
+  "pump_fun_types",
+  "pump_swap_types",
++ "pyo3",
+  "rand 0.9.2",
+  "ratatui",
+  "raydium_launchpad_types",
+@@ -4515,6 +4516,68 @@ version = "0.1.28"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
+ 
++[[package]]
++name = "pyo3"
++version = "0.25.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8970a78afe0628a3e3430376fc5fd76b6b45c4d43360ffd6cdd40bdde72b682a"
++dependencies = [
++ "indoc",
++ "libc",
++ "memoffset",
++ "once_cell",
++ "portable-atomic",
++ "pyo3-build-config",
++ "pyo3-ffi",
++ "pyo3-macros",
++ "unindent",
++]
++
++[[package]]
++name = "pyo3-build-config"
++version = "0.25.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "458eb0c55e7ece017adeba38f2248ff3ac615e53660d7c71a238d7d2a01c7598"
++dependencies = [
++ "once_cell",
++ "target-lexicon",
++]
++
++[[package]]
++name = "pyo3-ffi"
++version = "0.25.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7114fe5457c61b276ab77c5055f206295b812608083644a5c5b2640c3102565c"
++dependencies = [
++ "libc",
++ "pyo3-build-config",
++]
++
++[[package]]
++name = "pyo3-macros"
++version = "0.25.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a8725c0a622b374d6cb051d11a0983786448f7785336139c3c94f5aa6bef7e50"
++dependencies = [
++ "proc-macro2",
++ "pyo3-macros-backend",
++ "quote",
++ "syn 2.0.111",
++]
++
++[[package]]
++name = "pyo3-macros-backend"
++version = "0.25.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4109984c22491085343c05b0dbc54ddc405c3cf7b4374fc533f5c3313a572ccc"
++dependencies = [
++ "heck 0.5.0",
++ "proc-macro2",
++ "pyo3-build-config",
++ "quote",
++ "syn 2.0.111",
++]
++
+ [[package]]
+ name = "qstring"
+ version = "0.7.2"
+@@ -8888,6 +8951,12 @@ version = "1.0.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
+ 
++[[package]]
++name = "target-lexicon"
++version = "0.13.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
++
+ [[package]]
+ name = "tempfile"
+ version = "3.23.0"
+@@ -9543,6 +9612,12 @@ version = "0.2.6"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+ 
++[[package]]
++name = "unindent"
++version = "0.2.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7264e107f553ccae879d21fbea1d6724ac785e8c3bfc762137959b5802826ef3"
++
+ [[package]]
+ name = "unit-prefix"
+ version = "0.5.2"
+diff --git a/Cargo.toml b/Cargo.toml
+index 0462958ca23f8520a4b95c762fa09480f3b4d0a3..90f20e6aa4479e2893a5c103dfde8ec0b644107b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -3,7 +3,14 @@ name = "mamba"
+ version = "0.1.0"
+ edition = "2024"
+ 
++[lib]
++crate-type = ["rlib", "cdylib"]
++
++[features]
++python = ["dep:pyo3"]
++
+ [dependencies]
++pyo3 = { version = "0.25.1", optional = true, features = ["extension-module", "abi3-py310"] }
+ pump_fun_types = { path = "./src/idls/pump_fun_types" }
+ pump_swap_types = { path = "./src/idls/pump_swap_types" }
+ raydium_launchpad_types = { path = "./src/idls/raydium_launchpad_types" }
+diff --git a/README.md b/README.md
+index d473dbfee6d789f3c3ce42d294e07c6b507dcf8d..429afb8c3ca189a3fb3093aacd564a12484c61a4 100644
+--- a/README.md
++++ b/README.md
+@@ -2,6 +2,9 @@
+   <img src="docs/images/mamba_text_1280_640.png" width="640" alt="Mamba">
+ </p>
+ 
++[Embedded Python SDK](docs/python-sdk.md) — direct Python access to Mamba's Rust
++market modules, used by Dexter without an API server.
++
+ <p align="center">
+   <a href="https://github.com/FLOCK4H/Mamba/actions/workflows/docs.yml"><img src="https://github.com/FLOCK4H/Mamba/actions/workflows/docs.yml/badge.svg?event=push" alt="Docs"></a>
+   <a href="https://github.com/FLOCK4H/Mamba/stargazers"><img src="https://img.shields.io/github/stars/FLOCK4H/Mamba?style=flat-square" alt="Stars"></a>
+diff --git a/docs/python-sdk.md b/docs/python-sdk.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..55f5606552b288170c7a72b8e981f239559ff4df
+--- /dev/null
++++ b/docs/python-sdk.md
+@@ -0,0 +1,46 @@
++# Embedded Python SDK
++
++`python/mamba_sdk` and `src/python.rs` expose the internal Rust market modules
++through PyO3/maturin. The interface builds instructions and reads chain state;
++it never accepts private keys or submits transactions. Dexter owns signing and
++send authorization, so no API server is needed.
++
++Prefer Dexter's `scripts/setup_mamba.ps1` / `scripts/setup_mamba.sh` for setup.
++Run it again after updating Mamba. A manual Windows build is:
++
++```powershell
++python scripts/prepare_python_build.py
++maturin build --profile dev --locked --interpreter ..\Dexter\.venv\Scripts\python.exe --out target\wheels
++..\Dexter\.venv\Scripts\python.exe -m pip install --force-reinstall target\wheels\mamba_sdk-0.1.0-cp310-abi3-win_amd64.whl
++```
++
++`prepare_python_build.py` restores only missing compile-time IDLs at commits
++already pinned in `UPSTREAM_SOURCES.lock`; add `--tests` for upstream test fixtures.
++Python 3.10+ uses the stable ABI. Rust and the host C/C++ linker are required to
++build the wheel. A downloaded GitHub archive needs the same pinned IDL inputs.
++
++```python
++from mamba_sdk import Client, markets
++
++sdk = Client("https://your-rpc")
++route = await sdk.request("route", mint=mint, market_priority="pump_fun,pump_swap")
++plan = await sdk.request("build", side="buy", mint=mint, user=public_key,
++                         lamports=100_000, slippage_pct=5,
++                         priority_micro_lamports=0)
++```
++
++Operations: `route`, `build`, `curve`, `pool_state`, `snapshot`, `token_balance`,
++`quote_buy` (Pump.fun), and `create` (Pump.fun). Instruction bytes cross the Python
++boundary as base64 with public account metas; private keys stay in the application.
++`decode_pump_log` and `price_from_logs` use the same Rust event types.
++
++The SDK verifies RPC genesis hashes, rejects mixed clusters and excludes endpoints
++that cannot be verified. It uses exactly that pool, without ambient mainnet
++fallbacks. PumpSwap discovery supports provider index restrictions and pagination.
++Snapshots, prices and buy quotes use signed effective quote reserves, including
++boosts and fees held in the vault. Pump sells accept exact raw amounts and only
++close a token account when its entire balance is sold. Other market sells support
++integer percentages; exact partial requests must be representable by that interface.
++
++Supported markets follow `Swaps::default_market_priority()` dynamically. The
++binding does not contain a second set of market instruction layouts.
+diff --git a/pyproject.toml b/pyproject.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..0b9b5ec9d85e9e62b7a58c136a4c7141535d08ac
+--- /dev/null
++++ b/pyproject.toml
+@@ -0,0 +1,14 @@
++[build-system]
++requires = ["maturin>=1.8,<2"]
++build-backend = "maturin"
++
++[project]
++name = "mamba-sdk"
++version = "0.1.0"
++description = "Python bindings to Mamba's native market SDK"
++requires-python = ">=3.10"
++
++[tool.maturin]
++features = ["python"]
++module-name = "mamba_sdk._native"
++python-source = "python"
+diff --git a/python/mamba_sdk/__init__.py b/python/mamba_sdk/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1da96cf44164a26e2d4511ae03a093e17599bd79
+--- /dev/null
++++ b/python/mamba_sdk/__init__.py
+@@ -0,0 +1,23 @@
++"""Native, build-only access to Mamba's Rust market modules.
++
++The SDK does not accept private keys or submit transactions. Applications own
++signing, simulation, send authorization, confirmation, and spend limits.
++"""
++
++import asyncio
++import json
++
++from ._native import Client as NativeClient, decode_pump_log, derive_pump_curve, markets, price_from_logs
++
++
++class Client:
++    def __init__(self, rpc_urls: str):
++        self._native = NativeClient(rpc_urls)
++
++    async def request(self, operation: str, **params):
++        payload = json.dumps({"op": operation, **params}, allow_nan=False)
++        result = await asyncio.to_thread(self._native.request_json, payload)
++        return json.loads(result)
++
++
++__all__ = ["Client", "markets"]
+diff --git a/scripts/prepare_python_build.py b/scripts/prepare_python_build.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..696be54e4aa493b7db386cff3d2ad7fd348fd5af
+--- /dev/null
++++ b/scripts/prepare_python_build.py
+@@ -0,0 +1,50 @@
++"""Fetch only missing, pinned IDLs required to compile the native SDK.
++
++Uses the existing upstream lock; does not update dependencies or Git remotes.
++Full upstream mirrors from sync_sources.sh remain supported.
++"""
++import json
++from pathlib import Path
++import re
++import urllib.request
++
++ROOT = Path(__file__).resolve().parents[1]
++INPUTS = {
++    'raydium_docs': 'public/launchpad_creator_fee_upgrade/raydium_launchpad.json',
++    'meteora_dlmm_sdk': 'idls/dlmm.json',
++}
++TEST_INPUTS = {
++    'damm-v1-sdk': 'dynamic-amm-quote/tests/fixtures/accounts/HcjZvfeSNJbNkfLD4eEcRBr96AD3w1GpmMppaeRZf7ur.json',
++    'meteora_dlmm_sdk': 'commons/tests/fixtures/B5Eia4cE71tKuEDaqPHucJLG2fxySKyKzLMewd2nUvoc/lb_pair.bin',
++}
++
++
++def main():
++    import sys
++    lock = (ROOT / 'UPSTREAM_SOURCES.lock').read_text(encoding='utf-8')
++    inputs = list(INPUTS.items()) + (list(TEST_INPUTS.items()) if '--tests' in sys.argv else [])
++    for name, relative in inputs:
++        target = ROOT / 'external' / 'upstreams' / name / relative
++        if target.exists():
++            continue
++        pattern = rf'^\| {re.escape(name)} \| https://github.com/([^ ]+)\.git \| [^|]+ \| ([0-9a-f]{{40}}) \|$'
++        match = re.search(pattern, lock, re.MULTILINE)
++        if not match:
++            raise RuntimeError(f'Pinned source is missing for {name}')
++        repository, commit = match.groups()
++        url = f'https://raw.githubusercontent.com/{repository}/{commit}/{relative}'
++        with urllib.request.urlopen(url, timeout=60) as response:
++            data = response.read()
++        if relative in INPUTS.values():
++            parsed = json.loads(data)
++            if not parsed.get('instructions') or not parsed.get('types'):
++                raise RuntimeError(f'Invalid IDL for {name}')
++        elif not data:
++            raise RuntimeError(f'Empty test fixture for {name}')
++        target.parent.mkdir(parents=True, exist_ok=True)
++        target.write_bytes(data)
++        print(f'Prepared {name} IDL at pinned commit {commit[:12]}')
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/src/core/mod.rs b/src/core/mod.rs
+index 8748ed72f8084b7aaee3f3dd47e9b81bcb221b98..3f701ad6bda43da295196cd87795aa8f32b67b9b 100644
+--- a/src/core/mod.rs
++++ b/src/core/mod.rs
+@@ -2,5 +2,7 @@ pub mod cluster;
+ pub mod create;
+ pub mod ipfs;
+ pub mod pool;
++#[cfg(test)]
++mod program_accounts_tests;
+ pub mod sol;
+ pub mod wallet;
+diff --git a/src/core/program_accounts_tests.rs b/src/core/program_accounts_tests.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..29f865d43c2e8be86b4d57dc5d7c675861f426a9
+--- /dev/null
++++ b/src/core/program_accounts_tests.rs
+@@ -0,0 +1,128 @@
++use super::cluster::SolanaCluster;
++use super::sol::SolHook;
++use axum::{Json, Router, routing::post};
++use serde_json::{Value, json};
++use solana_client::nonblocking::rpc_client::RpcClient;
++use solana_program::pubkey::Pubkey;
++use std::sync::Arc;
++
++#[tokio::test]
++async fn optional_token_account_uses_binary_encoding_and_confirmed_commitment() {
++    let (url, task) = server(Router::new().route(
++        "/",
++        post(|Json(request): Json<Value>| async move {
++            assert_eq!(request["params"][1]["encoding"], "base64");
++            assert_eq!(request["params"][1]["commitment"], "confirmed");
++            Json(
++                json!({"jsonrpc":"2.0","id":request["id"],"result":{"context":{"slot":1},"value":{
++            "lamports":100,"data":["AP8=","base64"],
++            "owner":"TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
++            "executable":false,"rentEpoch":0,"space":2}}}),
++            )
++        }),
++    ))
++    .await;
++    let sol = SolHook::from_explicit_rpc_clients(
++        vec![Arc::new(RpcClient::new(url))],
++        SolanaCluster::Unknown,
++    )
++    .unwrap();
++    let account = sol
++        .get_account_optional(&Pubkey::new_unique())
++        .await
++        .unwrap()
++        .unwrap();
++    assert_eq!(account.data, vec![0, 255]);
++    task.abort();
++}
++
++async fn server(router: Router) -> (String, tokio::task::JoinHandle<()>) {
++    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++    let url = format!("http://{}", listener.local_addr().unwrap());
++    let handle = tokio::spawn(async move {
++        axum::serve(listener, router).await.unwrap();
++    });
++    (url, handle)
++}
++
++#[tokio::test]
++async fn program_accounts_fails_over_after_free_plan_index_rejection() {
++    let (first, first_task) = server(Router::new().route(
++        "/",
++        post(|| async {
++            Json(json!({"jsonrpc":"2.0","id":1,"error":"IndexNotAllowedOnFreePlan"}))
++        }),
++    ))
++    .await;
++    let (second, second_task) = server(Router::new().route(
++        "/",
++        post(|| async { Json(json!({"jsonrpc":"2.0","id":1,"result":[{"pubkey":"found-pool"}]})) }),
++    ))
++    .await;
++    let first = Arc::new(RpcClient::new(first));
++    let sol = SolHook::from_explicit_rpc_clients(
++        vec![first, Arc::new(RpcClient::new(second))],
++        SolanaCluster::Unknown,
++    )
++    .unwrap();
++    let entries = sol
++        .get_program_accounts_json_resilient(&Pubkey::new_unique(), json!({"encoding":"base64"}))
++        .await
++        .unwrap();
++    assert_eq!(entries[0]["pubkey"], "found-pool");
++    first_task.abort();
++    second_task.abort();
++}
++
++#[tokio::test]
++async fn program_accounts_accumulates_paginated_results() {
++    let (url, task) = server(Router::new().route("/", post(|Json(request):Json<Value>| async move {
++        let result = if request["method"] == "getProgramAccounts" {
++            json!({"error":{"code":-32600,"message":"use getProgramAccountsV2 with pagination"}})
++        } else if request["params"][1]["paginationKey"].is_null() {
++            json!({"result":{"accounts":[{"pubkey":"first"}],"paginationKey":"page-two"}})
++        } else {
++            assert_eq!(request["params"][1]["paginationKey"], "page-two");
++            json!({"result":{"accounts":[{"pubkey":"second"}]}})
++        };
++        Json(result)
++    }))).await;
++    let sol = SolHook::from_explicit_rpc_clients(
++        vec![Arc::new(RpcClient::new(url))],
++        SolanaCluster::Unknown,
++    )
++    .unwrap();
++    let entries = sol
++        .get_program_accounts_json_resilient(&Pubkey::new_unique(), json!({"encoding":"base64"}))
++        .await
++        .unwrap();
++    assert_eq!(entries.len(), 2);
++    assert_eq!(entries[1]["pubkey"], "second");
++    task.abort();
++}
++
++#[tokio::test]
++async fn program_accounts_rejects_repeated_cursor_instead_of_returning_partial_results() {
++    let (url, task) = server(Router::new().route(
++        "/",
++        post(|Json(request): Json<Value>| async move {
++            Json(if request["method"] == "getProgramAccounts" {
++                json!({"error":{"message":"use getProgramAccountsV2"}})
++            } else {
++                json!({"result":{"accounts":[{"pubkey":"incomplete"}],"paginationKey":"same-page"}})
++            })
++        }),
++    ))
++    .await;
++    let sol = SolHook::from_explicit_rpc_clients(
++        vec![Arc::new(RpcClient::new(url))],
++        SolanaCluster::Unknown,
++    )
++    .unwrap();
++    let error = sol
++        .get_program_accounts_json_resilient(&Pubkey::new_unique(), json!({}))
++        .await
++        .unwrap_err();
++    assert!(error.to_string().contains("refusing partial results"));
++    task.abort();
++}
+diff --git a/src/core/sol.rs b/src/core/sol.rs
+index 82a320ba4d00c8e36c3f394c4c12f179cb52ee75..2a62dca5db0b18357028147c7e63d63eb2090684 100644
+--- a/src/core/sol.rs
++++ b/src/core/sol.rs
+@@ -312,6 +312,25 @@ impl SolHook {
+         Self::from_rpc_client(Arc::new(RpcClient::new(rpc_client)))
+     }
+ 
++    /// Use exactly the supplied endpoint pool. Embedded consumers must not
++    /// inherit unrelated environment endpoints or an implicit mainnet fallback.
++    pub fn from_explicit_rpc_clients(
++        clients: Vec<Arc<RpcClient>>,
++        cluster: SolanaCluster,
++    ) -> anyhow::Result<Self> {
++        let mut seen = HashSet::new();
++        let clients: Vec<_> = clients
++            .into_iter()
++            .filter(|rpc| seen.insert(rpc.url()))
++            .collect();
++        let primary = clients.first().context("RPC pool is empty")?.clone();
++        Ok(Self {
++            rpc_client: primary,
++            cluster,
++            read_rpc_clients: Arc::new(clients),
++        })
++    }
++
+     pub fn from_rpc_client(rpc_client: Arc<RpcClient>) -> Self {
+         Self::from_rpc_pool_with_cluster(
+             rpc_client.clone(),
+@@ -736,6 +755,107 @@ impl SolHook {
+         }
+     }
+ 
++    /// Filtered program-account scans with provider capability failover and
++    /// Helius pagination. Some free endpoints accept reads but reject indexes.
++    pub async fn get_program_accounts_json_resilient(
++        &self,
++        program: &Pubkey,
++        options: serde_json::Value,
++    ) -> anyhow::Result<Vec<serde_json::Value>> {
++        use serde_json::json;
++        let http = reqwest::Client::builder()
++            .timeout(Duration::from_secs(15))
++            .build()?;
++        let mut last_error =
++            anyhow::anyhow!("no RPC endpoints available for program-account lookup");
++        for rpc in self.read_rpc_clients_for_attempts("getProgramAccounts") {
++            let mut method = "getProgramAccounts";
++            let mut cursor: Option<String> = None;
++            let mut accounts = Vec::new();
++            for page in 0..=100 {
++                let mut params = options.clone();
++                if method == "getProgramAccountsV2" {
++                    params["limit"] = json!(1000);
++                    if let Some(key) = cursor.as_ref() {
++                        params["paginationKey"] = json!(key);
++                    }
++                }
++                let response = match http
++                    .post(rpc.url())
++                    .json(&json!({
++                        "jsonrpc":"2.0", "id":1, "method":method,
++                        "params":[program.to_string(),params],
++                    }))
++                    .send()
++                    .await
++                {
++                    Ok(response) => response,
++                    Err(error) => {
++                        last_error = error.into();
++                        break;
++                    }
++                };
++                let status = response.status();
++                let body: serde_json::Value = match response.json().await {
++                    Ok(body) => body,
++                    Err(error) => {
++                        last_error = error.into();
++                        break;
++                    }
++                };
++                if !status.is_success() || body.get("error").is_some_and(|v| !v.is_null()) {
++                    let message = body
++                        .get("error")
++                        .map(ToString::to_string)
++                        .unwrap_or_else(|| status.to_string());
++                    let lower = message.to_ascii_lowercase();
++                    if method == "getProgramAccounts"
++                        && (lower.contains("getprogramaccountsv2")
++                            || lower.contains("too many accounts requested"))
++                    {
++                        method = "getProgramAccountsV2";
++                        continue;
++                    }
++                    last_error = anyhow::anyhow!(
++                        "program-account lookup rejected by provider: {}",
++                        Self::redact_url_queries_in_text(&message)
++                    );
++                    break;
++                }
++                if method == "getProgramAccounts" {
++                    match body.get("result").and_then(|v| v.as_array()) {
++                        Some(entries) => return Ok(entries.clone()),
++                        None => {
++                            last_error = anyhow::anyhow!("invalid getProgramAccounts response");
++                            break;
++                        }
++                    }
++                }
++                let result = &body["result"];
++                let Some(entries) = result["accounts"].as_array() else {
++                    last_error = anyhow::anyhow!("invalid paginated program-account response");
++                    break;
++                };
++                accounts.extend(entries.iter().cloned());
++                let next = result["paginationKey"]
++                    .as_str()
++                    .filter(|v| !v.is_empty())
++                    .map(str::to_owned);
++                if next.is_none() {
++                    return Ok(accounts);
++                }
++                if next == cursor || page == 100 {
++                    last_error = anyhow::anyhow!(
++                        "program-account pagination did not finish; refusing partial results"
++                    );
++                    break;
++                }
++                cursor = next;
++            }
++        }
++        Err(last_error)
++    }
++
+     pub async fn run_rpc_attempts<T, Op, Fut>(&self, operation: &str, op: Op) -> anyhow::Result<T>
+     where
+         Op: Fn(Arc<RpcClient>) -> Fut,
+@@ -1249,8 +1369,8 @@ impl SolHook {
+                 .get_account_with_config(
+                     address,
+                     RpcAccountInfoConfig {
+-                        encoding: Some(UiAccountEncoding::JsonParsed),
+-                        commitment: Some(CommitmentConfig::finalized()),
++                        encoding: Some(UiAccountEncoding::Base64),
++                        commitment: Some(CommitmentConfig::confirmed()),
+                         min_context_slot: None,
+                         data_slice: None,
+                     },
+diff --git a/src/dex/pump_fun.rs b/src/dex/pump_fun.rs
+index f7f5dd64c1b0f342f319cf3d0ba76f9f310b3049..ed161f33a06b20fcb2f01e4e44f7a801f80955e2 100644
+--- a/src/dex/pump_fun.rs
++++ b/src/dex/pump_fun.rs
+@@ -303,11 +303,14 @@ impl PumpFun {
+     }
+ 
+     pub async fn derive_bonding_curve(mint: &Pubkey) -> anyhow::Result<Pubkey> {
+-        let (pda, _) =
+-            Pubkey::find_program_address(&[b"bonding-curve", mint.as_ref()], &PUMP_FUN_ID);
++        let (pda, _) = Self::derive_bonding_curve_with_bump(mint);
+         Ok(pda)
+     }
+ 
++    pub fn derive_bonding_curve_with_bump(mint: &Pubkey) -> (Pubkey, u8) {
++        Pubkey::find_program_address(&[b"bonding-curve", mint.as_ref()], &PUMP_FUN_ID)
++    }
++
+     pub async fn fetch_state(&self, bonding_curve: &Pubkey) -> anyhow::Result<BondingCurveAccount> {
+         let data = self
+             .sol
+@@ -657,6 +660,80 @@ impl PumpFun {
+             .min(u128::from(u64::MAX)) as u64
+     }
+ 
++    /// Quote a buy using the same current state and fee model as the builder.
++    pub async fn quote_buy_for_mint(&self, mint: &Pubkey, lamports: u64) -> anyhow::Result<u64> {
++        let curve = self
++            .fetch_state(&Self::derive_bonding_curve(mint).await?)
++            .await?;
++        anyhow::ensure!(!curve.complete, "migration_pending");
++        let global = self.fetch_global_state().await?;
++        let fees = self.fetch_fee_config().await?;
++        Self::quote_buy_token_amount_out_raw(&global, fees.as_ref(), &curve, lamports)
++    }
++
++    /// Plan a launch with the same global state, fees and core builders as Mamba.
++    pub async fn plan_launch_for_user(
++        &self,
++        create: crate::core::create::PumpFunCreatePlan,
++        lamports: u64,
++        slippage_pct: f64,
++    ) -> anyhow::Result<(crate::core::create::PlannedCreateTx, bool, u64)> {
++        use crate::core::create::{
++            ComputeBudgetPlan, PumpFunAutoBuyExactSolInPlan, plan_pump_fun_create,
++            plan_pump_fun_create_and_buy_exact_sol_in,
++        };
++        anyhow::ensure!(
++            !create.name.trim().is_empty()
++                && !create.symbol.trim().is_empty()
++                && !create.uri.trim().is_empty(),
++            "launch requires name, symbol and URI"
++        );
++        anyhow::ensure!(
++            slippage_pct.is_finite() && (0.0..100.0).contains(&slippage_pct),
++            "invalid launch slippage"
++        );
++        let global = self.fetch_global_state().await?;
++        let mayhem = global.mayhem_mode_enabled;
++        let create = crate::core::create::PumpFunCreatePlan {
++            is_mayhem_mode: mayhem,
++            ..create
++        };
++        let budget = ComputeBudgetPlan {
++            compute_unit_price_micro_lamports: None,
++            compute_unit_limit: None,
++        };
++        if lamports == 0 {
++            return Ok((plan_pump_fun_create(create, budget)?, mayhem, 0));
++        }
++        let curve = BondingCurveAccount {
++            virtual_token_reserves: global.initial_virtual_token_reserves,
++            virtual_sol_reserves: global.initial_virtual_sol_reserves,
++            real_token_reserves: global.initial_real_token_reserves,
++            real_sol_reserves: 0,
++            token_total_supply: global.token_total_supply,
++            complete: false,
++            creator: create.payer,
++            is_mayhem_mode: mayhem,
++            is_cashback_coin: false,
++        };
++        let fees = self.fetch_fee_config().await?;
++        let expected =
++            Self::quote_buy_token_amount_out_raw(&global, fees.as_ref(), &curve, lamports)?;
++        let min_tokens = ((expected as f64) * (1.0 - slippage_pct / 100.0)).floor() as u64;
++        anyhow::ensure!(min_tokens > 0, "launch buy quote is too small");
++        let buy = PumpFunAutoBuyExactSolInPlan {
++            spendable_sol_in: lamports,
++            min_tokens_out: min_tokens,
++            fee_recipient: Self::fee_recipient_for_mode(&global, mayhem),
++            track_volume: false,
++        };
++        Ok((
++            plan_pump_fun_create_and_buy_exact_sol_in(create, buy, budget)?,
++            mayhem,
++            expected,
++        ))
++    }
++
+     pub fn lamports_to_tokens(&self, lamports: f64, price: f64) -> u64 {
+         let lamports = lamports / 1e9;
+         let tokens = lamports / price;
+@@ -1147,6 +1224,32 @@ impl PumpFun {
+         slippage: f64,
+         _price: f64,
+         priority_fee_override: Option<PriorityFeeOverride>,
++    ) -> anyhow::Result<(Vec<Instruction>, u64)> {
++        self.sell_for_user_with_amount(
++            buyer,
++            mint,
++            bonding_curve,
++            _creator,
++            sell_pct,
++            slippage,
++            _price,
++            priority_fee_override,
++            None,
++        )
++        .await
++    }
++
++    pub async fn sell_for_user_with_amount(
++        &self,
++        buyer: &Pubkey,
++        mint: &Pubkey,
++        bonding_curve: &Pubkey,
++        _creator: &Pubkey,
++        sell_pct: u64,
++        slippage: f64,
++        _price: f64,
++        priority_fee_override: Option<PriorityFeeOverride>,
++        token_amount_raw: Option<u64>,
+     ) -> anyhow::Result<(Vec<Instruction>, u64)> {
+         let buyer = *buyer;
+         let program = self
+@@ -1167,7 +1270,12 @@ impl PumpFun {
+         let sell_pct = sell_pct.clamp(1, 100);
+         anyhow::ensure!(token_balance_raw > 0, "no token balance for pump.fun sell");
+ 
+-        let token_amount_out = token_balance_raw.saturating_mul(sell_pct) / 100;
++        let token_amount_out =
++            token_amount_raw.unwrap_or_else(|| token_balance_raw.saturating_mul(sell_pct) / 100);
++        anyhow::ensure!(
++            token_amount_out <= token_balance_raw,
++            "sell amount exceeds wallet balance"
++        );
+         anyhow::ensure!(
+             token_amount_out > 0,
+             "pump.fun sell amount is too small for requested percentage"
+@@ -1253,7 +1361,7 @@ impl PumpFun {
+             data: data.to_vec(),
+         });
+ 
+-        if sell_pct >= 100 && self.account_exists(&associated_user).await? {
++        if token_amount_out == token_balance_raw && self.account_exists(&associated_user).await? {
+             let close_token_ix =
+                 self.sol
+                     .close_token_account_ix(&program, &associated_user, &buyer, &buyer)?;
+diff --git a/src/dex/pump_swap.rs b/src/dex/pump_swap.rs
+index b74aed2b9dbdd92251293b4b4c5c98c873e7a9ae..c06d9bcd2c7d4ec0761bfa61d2f5965713bcd009 100644
+--- a/src/dex/pump_swap.rs
++++ b/src/dex/pump_swap.rs
+@@ -432,8 +432,7 @@ impl PumpSwap {
+             .context("failed to compile unsigned tx for pump.swap fee simulation")?;
+         let sim = self
+             .sol
+-            .rpc_client
+-            .simulate_transaction_with_config(
++            .simulate_transaction_with_config_resilient(
+                 &tx,
+                 RpcSimulateTransactionConfig {
+                     sig_verify: false,
+@@ -496,6 +495,7 @@ impl PumpSwap {
+             base_reserve > 0 && quote_reserve > 0,
+             "pump.swap reserves are invalid"
+         );
++        let quote_reserve = self.effective_quote_reserves(pool, quote_reserve).await?;
+         let (lp_fee_bps, protocol_fee_bps, creator_fee_bps) = self
+             .simulate_buy_fee_bps(
+                 buyer,
+@@ -548,8 +548,7 @@ impl PumpSwap {
+             .context("failed to compile unsigned tx for pump.swap buy quote simulation")?;
+         let sim = self
+             .sol
+-            .rpc_client
+-            .simulate_transaction_with_config(
++            .simulate_transaction_with_config_resilient(
+                 &tx,
+                 RpcSimulateTransactionConfig {
+                     sig_verify: false,
+@@ -569,7 +568,10 @@ impl PumpSwap {
+                 err,
+                 logs.join(" | ")
+             );
+-            anyhow::bail!("pump.swap buy quote simulation failed: {err:?}");
++            anyhow::bail!(
++                "pump.swap buy quote simulation failed: {err:?}; logs: {}",
++                logs.join(" | ")
++            );
+         }
+ 
+         let quoted = Self::parse_logs(logs.iter(), None)
+@@ -596,8 +598,9 @@ impl PumpSwap {
+         }
+         quoted.with_context(|| {
+             format!(
+-                "pump.swap buy quote simulation missing {} event",
+-                expected_ix_name
++                "pump.swap buy quote simulation missing {} event; logs: {}",
++                expected_ix_name,
++                logs.join(" | ")
+             )
+         })
+     }
+@@ -618,8 +621,7 @@ impl PumpSwap {
+             .context("failed to compile unsigned tx for pump.swap sell quote simulation")?;
+         let sim = self
+             .sol
+-            .rpc_client
+-            .simulate_transaction_with_config(
++            .simulate_transaction_with_config_resilient(
+                 &tx,
+                 RpcSimulateTransactionConfig {
+                     sig_verify: false,
+@@ -639,7 +641,10 @@ impl PumpSwap {
+                 err,
+                 logs.join(" | ")
+             );
+-            anyhow::bail!("pump.swap sell quote simulation failed: {err:?}");
++            anyhow::bail!(
++                "pump.swap sell quote simulation failed: {err:?}; logs: {}",
++                logs.join(" | ")
++            );
+         }
+ 
+         let quoted = Self::parse_logs(logs.iter(), None)
+@@ -857,6 +862,36 @@ impl PumpSwap {
+         }
+     }
+ 
++    /// New pool tails are optional on older accounts. The signed virtual
++    /// reserve offsets boosts and accrued fees kept inside the quote vault.
++    fn effective_quote_reserves_from_data(account_data: &[u8], raw: u64) -> anyhow::Result<u64> {
++        anyhow::ensure!(account_data.len() >= 8, "pool account too short");
++        let mut cursor = Cursor::new(&account_data[8..]);
++        let _ = Pool::deserialize_reader(&mut cursor)?;
++        let offset = 8 + cursor.position() as usize + 1; // is_cashback_coin
++        let virtual_quote = if account_data.len() <= offset {
++            0
++        } else {
++            let bytes: [u8; 16] = account_data
++                .get(offset..offset + 16)
++                .context("truncated pool virtual quote reserves")?
++                .try_into()?;
++            i128::from_le_bytes(bytes)
++        };
++        let effective = i128::from(raw)
++            .checked_add(virtual_quote)
++            .context("effective quote reserve overflow")?;
++        anyhow::ensure!(
++            (0..=i128::from(u64::MAX)).contains(&effective),
++            "effective quote reserves out of range"
++        );
++        Ok(effective as u64)
++    }
++
++    pub async fn effective_quote_reserves(&self, pool: &Pubkey, raw: u64) -> anyhow::Result<u64> {
++        Self::effective_quote_reserves_from_data(&self.fetch_account_data_raw(pool).await?, raw)
++    }
++
+     async fn buy_remaining_accounts_for_pool(
+         &self,
+         state: &Pool,
+@@ -1003,115 +1038,40 @@ impl PumpSwap {
+     /// find PumpSwap pools by base mint (and optional quote mint) via on-chain memcmp filters
+     /// returns pool addresses that match the given mint(s)
+     async fn find_pools_by_lookup_spec(&self, spec: PoolLookupSpec) -> anyhow::Result<Vec<Pubkey>> {
+-        use anyhow::Context as _;
+-        use base64::Engine;
+-        use reqwest::Client;
+-        use serde::Deserialize;
++        use base64::Engine as _;
+         use serde_json::json;
+-
+-        // PumpSwap mainnet scans on Helius currently fail when we combine the field memcmp filters
+-        // with a discriminator memcmp. Query by the stable field offsets and let fetch_state()
+-        // validate the returned account shape.
+-        #[derive(Debug, Deserialize)]
+-        struct RpcErrorBody {
+-            code: i64,
+-            message: String,
+-        }
+-
+-        #[derive(Debug, Deserialize)]
+-        struct ProgramAccountsAccount {
+-            data: (String, String),
+-        }
+-
+-        #[derive(Debug, Deserialize)]
+-        struct ProgramAccountsEntry {
+-            pubkey: String,
+-            account: ProgramAccountsAccount,
+-        }
+-
+-        #[derive(Debug, Deserialize)]
+-        struct ProgramAccountsResponse {
+-            result: Option<Vec<ProgramAccountsEntry>>,
+-            error: Option<RpcErrorBody>,
+-        }
+-
+         let mut filters = Vec::new();
+-
+-        if let Some(base_mint) = spec.base_mint {
+-            filters.push(json!({
+-                "memcmp": {
+-                    "offset": BASE_MINT_OFFSET,
+-                    "bytes": base_mint.to_string(),
+-                }
+-            }));
++        if let Some(base) = spec.base_mint {
++            filters.push(json!({"memcmp":{"offset":BASE_MINT_OFFSET,"bytes":base.to_string()}}));
+         }
+-
+-        if let Some(q) = spec.quote_mint {
+-            filters.push(json!({
+-                "memcmp": {
+-                    "offset": QUOTE_MINT_OFFSET,
+-                    "bytes": q.to_string(),
+-                }
+-            }));
++        if let Some(quote) = spec.quote_mint {
++            filters.push(json!({"memcmp":{"offset":QUOTE_MINT_OFFSET,"bytes":quote.to_string()}}));
+         }
+-
+-        let client = Client::new();
+-        let response = client
+-            .post(self.sol.rpc_client.url())
+-            .json(&json!({
+-                "jsonrpc": "2.0",
+-                "id": "pump-swap-pool-discovery",
+-                "method": "getProgramAccounts",
+-                "params": [
+-                    PUMP_SWAP_ID.to_string(),
+-                    {
+-                        "commitment": "confirmed",
+-                        "encoding": "base64",
+-                        "filters": filters,
+-                    }
+-                ]
+-            }))
+-            .send()
++        let entries = self
++            .sol
++            .get_program_accounts_json_resilient(
++                &PUMP_SWAP_ID,
++                json!({
++                    "commitment":"confirmed", "encoding":"base64", "filters":filters,
++                }),
++            )
+             .await?;
+-        let status = response.status();
+-        let body = response
+-            .text()
+-            .await
+-            .context("pump.swap getProgramAccounts read body failed")?;
+-        anyhow::ensure!(
+-            status.is_success(),
+-            "pump.swap getProgramAccounts http {status}: {body}"
+-        );
+-        let parsed: ProgramAccountsResponse = serde_json::from_str(&body)
+-            .context("pump.swap getProgramAccounts response decode failed")?;
+-        if let Some(error) = parsed.error {
+-            anyhow::bail!(
+-                "pump.swap getProgramAccounts rpc error {}: {}",
+-                error.code,
+-                error.message
+-            );
+-        }
+-
+         let mut pools = Vec::new();
+-        for entry in parsed.result.unwrap_or_default() {
+-            let pool = entry
+-                .pubkey
+-                .parse::<Pubkey>()
+-                .with_context(|| format!("invalid pump.swap pool pubkey {}", entry.pubkey))?;
+-            let state = base64::prelude::BASE64_STANDARD
+-                .decode(entry.account.data.0.as_bytes())
+-                .with_context(|| format!("failed to decode base64 pump.swap pool {}", pool))?;
+-            if let Err(error) = Self::decode_pool_state_bytes(&pool, &state) {
+-                warn!(
+-                    "ignoring malformed pump.swap pool candidate {} discovered via mint filters: {}",
+-                    pool, error
+-                );
++        for entry in entries {
++            let pool = entry["pubkey"]
++                .as_str()
++                .context("pool address missing")?
++                .parse::<Pubkey>()?;
++            let data = entry["account"]["data"][0]
++                .as_str()
++                .context("pool account data missing")?;
++            let state = base64::prelude::BASE64_STANDARD.decode(data.as_bytes())?;
++            if Self::decode_pool_state_bytes(&pool, &state).is_err() {
+                 continue;
+             }
+             self.cache_pool_state_bytes(&pool, &state).await;
+             pools.push(pool);
+         }
+-
+         Ok(pools)
+     }
+ 
+@@ -1635,15 +1595,19 @@ impl PumpSwap {
+ 
+     pub async fn fetch_price(&self, pool: &Pubkey) -> anyhow::Result<(Pool, f64)> {
+         let state = self.fetch_state(pool).await?;
+-        let vsr = self
+-            .sol
+-            .get_token_balance_from_ata(&Address::from(state.pool_quote_token_account.to_bytes()))
+-            .await?;
+-        let vtr = self
+-            .sol
+-            .get_token_balance_from_ata(&Address::from(state.pool_base_token_account.to_bytes()))
+-            .await?;
+-        let price = vsr as f64 / vtr as f64;
++        let base = Pubkey::new_from_array(state.pool_base_token_account.to_bytes());
++        let quote = Pubkey::new_from_array(state.pool_quote_token_account.to_bytes());
++        let ((base_raw, base_decimals), (quote_raw, quote_decimals)) = tokio::try_join!(
++            self.sol.get_token_balance_raw_from_ata(&base),
++            self.sol.get_token_balance_raw_from_ata(&quote)
++        )?;
++        let quote_raw = self.effective_quote_reserves(pool, quote_raw).await?;
++        anyhow::ensure!(
++            base_raw > 0 && quote_raw > 0,
++            "pool has no effective liquidity"
++        );
++        let price = (quote_raw as f64 / 10_f64.powi(quote_decimals as i32))
++            / (base_raw as f64 / 10_f64.powi(base_decimals as i32));
+         Ok((state, price))
+     }
+ 
+@@ -1782,6 +1746,42 @@ impl PumpSwap {
+         vsr / vtr
+     }
+ 
++    /// Read the optional signed reserve extension without rejecting legacy
++    /// events. Four u64 fee/cashback fields precede virtual_quote_reserves.
++    pub fn price_from_log_line(log: &str) -> Option<f64> {
++        let raw = decode_b64(log.strip_prefix(SEARCH_FOR)?).ok()?;
++        if raw.len() < 8 {
++            return None;
++        }
++        let mut cursor = Cursor::new(&raw[8..]);
++        let (base, quote) = if raw[..8] == BUY_EVENT_DISCRIM {
++            let event = BuyEvent::deserialize_reader(&mut cursor).ok()?;
++            (
++                event.pool_base_token_reserves,
++                event.pool_quote_token_reserves,
++            )
++        } else if raw[..8] == SELL_EVENT_DISCRIM {
++            let event = SellEvent::deserialize_reader(&mut cursor).ok()?;
++            (
++                event.pool_base_token_reserves,
++                event.pool_quote_token_reserves,
++            )
++        } else {
++            return None;
++        };
++        let offset = 8 + cursor.position() as usize + 32;
++        let virtual_quote = match raw.get(offset..offset + 16) {
++            Some(bytes) => i128::from_le_bytes(bytes.try_into().ok()?),
++            None => 0,
++        };
++        let effective = i128::from(quote).checked_add(virtual_quote)?;
++        if base == 0 || effective <= 0 {
++            return None;
++        }
++        let price = (effective as f64 / 1e9) / (base as f64 / 1e6);
++        price.is_finite().then_some(price)
++    }
++
+     pub fn price_from_sell(sell: &SellEvent) -> f64 {
+         let vtr = sell.pool_base_token_reserves as f64 / 1e6;
+         let vsr = sell.pool_quote_token_reserves as f64 / 1e9;
+@@ -2184,6 +2184,32 @@ impl PumpSwap {
+         slippage: f64,
+         _price: f64,
+         priority_fee_override: Option<PriorityFeeOverride>,
++    ) -> anyhow::Result<(Vec<Instruction>, u64)> {
++        self.sell_for_user_with_amount(
++            buyer,
++            mint,
++            pool,
++            creator,
++            sell_pct,
++            slippage,
++            _price,
++            priority_fee_override,
++            None,
++        )
++        .await
++    }
++
++    pub async fn sell_for_user_with_amount(
++        &self,
++        buyer: &Pubkey,
++        mint: &Pubkey,
++        pool: &Pubkey,
++        creator: &Pubkey,
++        sell_pct: u64,
++        slippage: f64,
++        _price: f64,
++        priority_fee_override: Option<PriorityFeeOverride>,
++        token_amount_raw: Option<u64>,
+     ) -> anyhow::Result<(Vec<Instruction>, u64)> {
+         let buyer = *buyer;
+         let state = self
+@@ -2217,7 +2243,12 @@ impl PumpSwap {
+             .context("failed to fetch token balance for pump.swap sell")?;
+         anyhow::ensure!(token_balance_raw > 0, "no token balance for pump.swap sell");
+         let sell_pct = sell_pct.clamp(1, 100);
+-        let token_amount_out = token_balance_raw.saturating_mul(sell_pct) / 100;
++        let token_amount_out =
++            token_amount_raw.unwrap_or_else(|| token_balance_raw.saturating_mul(sell_pct) / 100);
++        anyhow::ensure!(
++            token_amount_out <= token_balance_raw,
++            "sell amount exceeds wallet balance"
++        );
+         anyhow::ensure!(
+             token_amount_out > 0,
+             "pump.swap sell amount is too small for requested percentage"
+@@ -2323,7 +2354,7 @@ impl PumpSwap {
+             data,
+         });
+ 
+-        if sell_pct >= 100 && self.account_exists(&associated_user).await? {
++        if token_amount_out == token_balance_raw && self.account_exists(&associated_user).await? {
+             let close_token_ix =
+                 self.sol
+                     .close_token_account_ix(&program, &associated_user, &buyer, &buyer)?;
+@@ -2346,6 +2377,53 @@ mod tests {
+     use borsh010::BorshSerialize as BorshSerializeV0;
+     use std::str::FromStr;
+ 
++    #[test]
++    fn test_effective_quote_reserves_support_legacy_boost_and_accrued_fees() {
++        let mut data = POOL_ACCOUNT_DISCRIM.to_vec();
++        borsh010::BorshSerialize::serialize(&Pool::default(), &mut data).unwrap();
++        assert_eq!(
++            PumpSwap::effective_quote_reserves_from_data(&data, 100).unwrap(),
++            100
++        );
++        data.push(0); // cashback
++        let offset = data.len();
++        data.extend_from_slice(&200_i128.to_le_bytes());
++        assert_eq!(
++            PumpSwap::effective_quote_reserves_from_data(&data, 100).unwrap(),
++            300
++        );
++        data[offset..].copy_from_slice(&(-30_i128).to_le_bytes());
++        assert_eq!(
++            PumpSwap::effective_quote_reserves_from_data(&data, 100).unwrap(),
++            70
++        );
++        data[offset..].copy_from_slice(&(-101_i128).to_le_bytes());
++        assert!(PumpSwap::effective_quote_reserves_from_data(&data, 100).is_err());
++        data.truncate(offset + 3);
++        assert!(PumpSwap::effective_quote_reserves_from_data(&data, 100).is_err());
++    }
++
++    #[test]
++    fn test_event_price_includes_signed_virtual_reserves() {
++        let event = BuyEvent {
++            pool_base_token_reserves: 1_000_000,
++            pool_quote_token_reserves: 1_000_000_000,
++            ..Default::default()
++        };
++        let mut data = BUY_EVENT_DISCRIM.to_vec();
++        borsh010::BorshSerialize::serialize(&event, &mut data).unwrap();
++        let legacy = format!("Program data: {}", B64.encode(&data));
++        assert_eq!(PumpSwap::price_from_log_line(&legacy), Some(1.0));
++        data.extend_from_slice(&[0; 32]);
++        let offset = data.len();
++        data.extend_from_slice(&2_000_000_000_i128.to_le_bytes());
++        let boosted = format!("Program data: {}", B64.encode(&data));
++        assert_eq!(PumpSwap::price_from_log_line(&boosted), Some(3.0));
++        data[offset..].copy_from_slice(&(-200_000_000_i128).to_le_bytes());
++        let accrued_fees = format!("Program data: {}", B64.encode(&data));
++        assert_eq!(PumpSwap::price_from_log_line(&accrued_fees), Some(0.8));
++    }
++
+     fn encode_fixture_event<T: BorshSerializeV0>(discriminator: &[u8; 8], event: &T) -> String {
+         let mut payload = Vec::with_capacity(1024);
+         payload.extend_from_slice(discriminator);
+diff --git a/src/dex/swaps.rs b/src/dex/swaps.rs
+index f93f5a3565114f492030aa59e4c928c31d6a8423..1fdc96456b444445903acdbe4f2f53e8137bef59 100644
+--- a/src/dex/swaps.rs
++++ b/src/dex/swaps.rs
+@@ -926,12 +926,16 @@ impl Swaps {
+                     .get_token_balance_raw_from_ata(&pool_quote)
+                     .await?
+                     .0;
++                let effective_quote_raw = self
++                    .pump_swap
++                    .effective_quote_reserves(pool, quote_raw)
++                    .await?;
+                 let token_decimals = self.sol_hook.get_token_decimals(mint).await?;
+ 
+                 if base_mint == *mint && quote_mint == crate::core::sol::WSOL_MINT {
+                     let token_ui = base_raw as f64 / 10_f64.powi(token_decimals as i32);
+                     anyhow::ensure!(token_ui > 0.0, "pump.swap token reserve is zero");
+-                    let price = (quote_raw as f64 / Self::LAMPORTS_PER_SOL) / token_ui;
++                    let price = (effective_quote_raw as f64 / Self::LAMPORTS_PER_SOL) / token_ui;
+                     let max_buy =
+                         Self::sol_capacity_from_token_reserve_raw(base_raw, token_decimals, price);
+                     RouteLiquiditySnapshot {
+diff --git a/src/lib.rs b/src/lib.rs
+index 7ee4a0f6857f9b1960166110bba5d9c137196cc5..22d3fa029f754d6ecac2cbf1dd042bde67c7e379 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -31,3 +31,6 @@ pub mod mcp;
+ pub mod swqos;
+ pub mod transfers;
+ pub mod utils;
++
++#[cfg(feature = "python")]
++mod python;
+diff --git a/src/python.rs b/src/python.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..1f32a4df8b21247b42bdd2582612c7aad05d6e42
+--- /dev/null
++++ b/src/python.rs
+@@ -0,0 +1,502 @@
++//! Thin build-only Python bindings. Protocol layouts and quotes stay in dex/.
++use crate::core::{
++    cluster::SolanaCluster,
++    sol::{PriorityFeeOverride, SolHook, WSOL_MINT},
++};
++use crate::dex::{
++    pump_fun::{PumpFun, PumpFunEvent},
++    pump_swap::PumpSwap,
++    swaps::{Market, MintPoolRoute, Swaps},
++};
++use anyhow::{Context, ensure};
++use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
++use pyo3::{exceptions::PyValueError, prelude::*};
++use serde::Deserialize;
++use serde_json::{Value, json};
++use solana_client::nonblocking::rpc_client::RpcClient;
++use solana_keypair::Keypair;
++use solana_program::{instruction::Instruction, pubkey::Pubkey};
++use std::{str::FromStr, sync::Arc, time::Duration};
++use tokio::runtime::{Builder, Runtime};
++
++#[derive(Deserialize)]
++struct Request {
++    op: String,
++    name: Option<String>,
++    symbol: Option<String>,
++    uri: Option<String>,
++    mint: Option<String>,
++    user: Option<String>,
++    pool: Option<String>,
++    market_priority: Option<String>,
++    side: Option<String>,
++    lamports: Option<u64>,
++    token_amount_raw: Option<u64>,
++    sell_pct: Option<u64>,
++    slippage_pct: Option<f64>,
++    priority_micro_lamports: Option<u64>,
++}
++
++fn key(value: Option<&str>, label: &str) -> anyhow::Result<Pubkey> {
++    Pubkey::from_str(value.context(format!("{label} is required"))?)
++        .with_context(|| format!("invalid {label} public key"))
++}
++
++#[pyclass(frozen)]
++struct Client {
++    runtime: Runtime,
++    swaps: Swaps,
++}
++
++#[pymethods]
++impl Client {
++    #[new]
++    fn new(rpc_urls: &str) -> PyResult<Self> {
++        crate::utils::writing::mute_logs();
++        let urls: Vec<_> = rpc_urls
++            .split(',')
++            .map(str::trim)
++            .filter(|s| !s.is_empty())
++            .collect();
++        if urls.is_empty()
++            || urls
++                .iter()
++                .any(|url| !(url.starts_with("https://") || url.starts_with("http://")))
++        {
++            return Err(PyValueError::new_err(
++                "at least one HTTP RPC URL is required",
++            ));
++        }
++        let runtime = Builder::new_multi_thread()
++            .worker_threads(2)
++            .enable_all()
++            .build()
++            .map_err(|_| PyValueError::new_err("cannot start Mamba async runtime"))?;
++        let swaps = {
++            let _guard = runtime.enter();
++            let clients: Vec<_> = urls
++                .iter()
++                .map(|url| {
++                    Arc::new(RpcClient::new_with_timeout(
++                        (*url).to_owned(),
++                        Duration::from_secs(15),
++                    ))
++                })
++                .collect();
++            let checked = runtime.block_on(futures::future::join_all(clients.into_iter().map(
++                |rpc| async move {
++                    let genesis = rpc.get_genesis_hash().await;
++                    (rpc, genesis)
++                },
++            )));
++            let first_hash = checked
++                .iter()
++                .find_map(|(_, hash)| hash.as_ref().ok())
++                .copied()
++                .ok_or_else(|| PyValueError::new_err("cannot verify the SDK RPC cluster"))?;
++            if checked
++                .iter()
++                .any(|(_, hash)| hash.as_ref().is_ok_and(|hash| *hash != first_hash))
++            {
++                return Err(PyValueError::new_err(
++                    "SDK RPC endpoints belong to different Solana clusters",
++                ));
++            }
++            let cluster = SolanaCluster::from_genesis_hash(&first_hash.to_string());
++            let clients = checked
++                .into_iter()
++                .filter_map(|(rpc, hash)| hash.ok().map(|_| rpc))
++                .collect();
++            let sol = SolHook::from_explicit_rpc_clients(clients, cluster)
++                .map_err(|_| PyValueError::new_err("cannot initialize SDK RPC pool"))?;
++            // SDK constructors require a keypair; every build below explicitly
++            // supplies the caller's PUBLIC key. No private key enters this module.
++            let placeholder = Arc::new(Keypair::new());
++            Swaps::new(
++                sol.clone(),
++                PumpSwap::new(placeholder.clone(), Arc::new(sol.clone())),
++                PumpFun::new(placeholder, Arc::new(sol)),
++            )
++        };
++        Ok(Self { runtime, swaps })
++    }
++
++    fn request_json(&self, py: Python<'_>, payload: String) -> PyResult<String> {
++        let request: Request = serde_json::from_str(&payload)
++            .map_err(|_| PyValueError::new_err("invalid Mamba SDK request"))?;
++        py.allow_threads(|| self.runtime.block_on(self.dispatch(request)))
++            .and_then(|value| serde_json::to_string(&value).map_err(Into::into))
++            .map_err(|error| {
++                PyValueError::new_err(SolHook::redacted_error(&anyhow::anyhow!("{error:#}")))
++            })
++    }
++}
++
++impl Client {
++    async fn route(&self, req: &Request) -> anyhow::Result<MintPoolRoute> {
++        let mint = req.mint.as_ref().context("mint is required")?;
++        let markets = req
++            .market_priority
++            .as_deref()
++            .map(Market::parse_csv)
++            .transpose()?;
++        let quote = WSOL_MINT.to_string();
++        self.swaps
++            .find_pool_for_mint_with_market_priority(mint, Some(&quote), 0, markets.as_deref())
++            .await?
++            .context("route_unavailable_or_migration_pending")
++    }
++
++    async fn dispatch(&self, req: Request) -> anyhow::Result<Value> {
++        match req.op.as_str() {
++            "route" => {
++                let route = self.route(&req).await?;
++                let price = self
++                    .swaps
++                    .fetch_price_for_market_pool(route.market, &route.pool)
++                    .await?;
++                Ok(
++                    json!({"market": route.market.as_str(), "pool": route.pool.to_string(),
++                    "creator": route.creator.to_string(), "price": price}),
++                )
++            }
++            "pool_state" | "snapshot" => {
++                let pool = key(req.pool.as_deref(), "pool")?;
++                let state = self.swaps.pump_swap.fetch_state(&pool).await?;
++                let mut result = json!({"pool": pool.to_string(), "creator": state.creator.to_string(),
++                    "base_mint": state.base_mint.to_string(), "quote_mint": state.quote_mint.to_string(),
++                    "lp_mint": state.lp_mint.to_string(), "lp_supply": state.lp_supply,
++                    "pool_base_token_account": state.pool_base_token_account.to_string(),
++                    "pool_quote_token_account": state.pool_quote_token_account.to_string(),
++                    "coin_creator": state.coin_creator.to_string(), "is_mayhem_mode": state.is_mayhem_mode});
++                if req.op == "snapshot" {
++                    ensure!(
++                        state.quote_mint.to_bytes() == WSOL_MINT.to_bytes(),
++                        "pool is not SOL quoted"
++                    );
++                    let base = Pubkey::new_from_array(state.pool_base_token_account.to_bytes());
++                    let quote = Pubkey::new_from_array(state.pool_quote_token_account.to_bytes());
++                    let ((base_raw, decimals), (quote_raw, _)) = tokio::try_join!(
++                        self.swaps.sol_hook.get_token_balance_raw_from_ata(&base),
++                        self.swaps.sol_hook.get_token_balance_raw_from_ata(&quote)
++                    )?;
++                    ensure!(base_raw > 0 && quote_raw > 0, "pool has no liquidity");
++                    let effective = self
++                        .swaps
++                        .pump_swap
++                        .effective_quote_reserves(&pool, quote_raw)
++                        .await?;
++                    result["effective_quote_reserves_raw"] = json!(effective);
++                    result["base_reserves_raw"] = json!(base_raw);
++                    result["quote_reserves_raw"] = json!(quote_raw);
++                    result["base_decimals"] = json!(decimals);
++                    result["price"] = json!(
++                        (effective as f64 / 1e9) / (base_raw as f64 / 10_f64.powi(decimals as i32))
++                    );
++                    result["liquidity_sol"] = json!(quote_raw as f64 / 1e9);
++                }
++                Ok(result)
++            }
++            "curve" => {
++                let pool = match req.pool.as_deref() {
++                    Some(pool) => Pubkey::from_str(pool)?,
++                    None => {
++                        PumpFun::derive_bonding_curve(&key(req.mint.as_deref(), "mint")?).await?
++                    }
++                };
++                let state = self.swaps.pump_fun.fetch_state(&pool).await?;
++                Ok(
++                    json!({"pool": pool.to_string(), "creator": state.creator.to_string(),
++                    "complete": state.complete, "virtual_sol_reserves": state.virtual_sol_reserves,
++                    "virtual_token_reserves": state.virtual_token_reserves,
++                    "real_sol_reserves": state.real_sol_reserves, "real_token_reserves": state.real_token_reserves,
++                    "token_total_supply": state.token_total_supply,
++                    "is_mayhem_mode": state.is_mayhem_mode, "is_cashback_coin": state.is_cashback_coin}),
++                )
++            }
++            "quote_buy" => {
++                let mint = key(req.mint.as_deref(), "mint")?;
++                let amount = req.lamports.context("lamports is required")?;
++                ensure!(amount > 0, "buy amount must be positive");
++                Ok(
++                    json!({"token_amount_raw": self.swaps.pump_fun.quote_buy_for_mint(&mint, amount).await?}),
++                )
++            }
++            "token_balance" => {
++                let mint = key(req.mint.as_deref(), "mint")?;
++                let user = key(req.user.as_deref(), "user")?;
++                let ata = self.swaps.sol_hook.get_ata_auto(&user, &mint).await?;
++                if self
++                    .swaps
++                    .sol_hook
++                    .get_account_optional(&ata)
++                    .await?
++                    .is_none()
++                {
++                    return Ok(
++                        json!({"amount": 0, "decimals": self.swaps.sol_hook.get_token_decimals(&mint).await?}),
++                    );
++                }
++                let (amount, decimals) = self
++                    .swaps
++                    .sol_hook
++                    .get_token_balance_raw_from_ata(&ata)
++                    .await?;
++                Ok(json!({"amount": amount, "decimals": decimals}))
++            }
++            "build" => self.build(&req).await,
++            "create" => {
++                let payer = key(req.user.as_deref(), "user")?;
++                let mint = key(req.mint.as_deref(), "mint")?;
++                let create = crate::core::create::PumpFunCreatePlan {
++                    payer,
++                    mint,
++                    name: req.name.context("name is required")?,
++                    symbol: req.symbol.context("symbol is required")?,
++                    uri: req.uri.context("uri is required")?,
++                    is_mayhem_mode: false,
++                };
++                let (plan, mayhem, expected) = self
++                    .swaps
++                    .pump_fun
++                    .plan_launch_for_user(
++                        create,
++                        req.lamports.unwrap_or(0),
++                        req.slippage_pct.unwrap_or(15.0),
++                    )
++                    .await?;
++                let derived: serde_json::Map<String, Value> = plan
++                    .derived
++                    .map
++                    .iter()
++                    .map(|(name, address)| (name.clone(), json!(address.to_string())))
++                    .collect();
++                Ok(
++                    json!({"market":"pump_fun", "mint":mint.to_string(), "owner":payer.to_string(),
++                    "token_program":if mayhem {crate::core::sol::TOKEN_2022_PROGRAM_ID.to_string()} else {crate::core::sol::TOKEN_PROGRAM_ID.to_string()},
++                    "is_mayhem_mode":mayhem, "create_variant":if mayhem {"create_v2"} else {"create"},
++                    "derived":derived, "expected_tokens_out":expected, "compute_units":800000,
++                    "priority_micro_lamports":req.priority_micro_lamports.unwrap_or(0),
++                    "instructions":plan.instructions.iter().map(instruction_json).collect::<Vec<_>>()}),
++                )
++            }
++            _ => anyhow::bail!("unsupported Mamba SDK operation"),
++        }
++    }
++
++    async fn build(&self, req: &Request) -> anyhow::Result<Value> {
++        let user = key(req.user.as_deref(), "user")?;
++        let mint = key(req.mint.as_deref(), "mint")?;
++        let side = req.side.as_deref().context("side is required")?;
++        ensure!(side == "buy" || side == "sell", "side must be buy or sell");
++        let slippage = req.slippage_pct.unwrap_or(5.0);
++        ensure!(
++            slippage.is_finite() && slippage > 0.0 && slippage < 100.0,
++            "invalid slippage percentage"
++        );
++        let pct = req.sell_pct.unwrap_or(100);
++        ensure!((1..=100).contains(&pct), "invalid sell percentage");
++        if side == "buy" {
++            ensure!(req.lamports.unwrap_or(0) > 0, "buy amount must be positive");
++        }
++        if let Some(amount) = req.token_amount_raw {
++            ensure!(amount > 0, "sell amount must be positive");
++        }
++        // Resolve from current chain state on EVERY build, including recovered
++        // positions and a sell whose original buy used the bonding curve.
++        let route = self.route(req).await?;
++        let price = self
++            .swaps
++            .fetch_price_for_market_pool(route.market, &route.pool)
++            .await?;
++        let fee = req.priority_micro_lamports.unwrap_or(0);
++        let fee_override = Some(PriorityFeeOverride::ExactMicroLamports(fee));
++        let (instructions, _) = match (side, route.market) {
++            ("buy", Market::PumpFun) => {
++                self.swaps
++                    .pump_fun
++                    .buy_for_user_with_priority_fee_override(
++                        &user,
++                        &mint,
++                        &route.pool,
++                        &route.creator,
++                        req.lamports.unwrap_or(0) as f64 / 1e9,
++                        slippage,
++                        price,
++                        Some(true),
++                        fee_override,
++                    )
++                    .await?
++            }
++            ("buy", Market::PumpSwap) => {
++                self.swaps
++                    .pump_swap
++                    .buy_for_user_with_priority_fee_override(
++                        &user,
++                        &mint,
++                        &route.pool,
++                        &route.creator,
++                        req.lamports.unwrap_or(0) as f64 / 1e9,
++                        slippage,
++                        price,
++                        Some(true),
++                        fee_override,
++                    )
++                    .await?
++            }
++            ("sell", Market::PumpFun) => {
++                self.swaps
++                    .pump_fun
++                    .sell_for_user_with_amount(
++                        &user,
++                        &mint,
++                        &route.pool,
++                        &route.creator,
++                        pct,
++                        slippage,
++                        price,
++                        fee_override,
++                        req.token_amount_raw,
++                    )
++                    .await?
++            }
++            ("sell", Market::PumpSwap) => {
++                self.swaps
++                    .pump_swap
++                    .sell_for_user_with_amount(
++                        &user,
++                        &mint,
++                        &route.pool,
++                        &route.creator,
++                        pct,
++                        slippage,
++                        price,
++                        fee_override,
++                        req.token_amount_raw,
++                    )
++                    .await?
++            }
++            ("buy", _) => {
++                self.swaps
++                    .build_buy_instructions_for_user(
++                        &user,
++                        &mint,
++                        &route.pool,
++                        &route.creator,
++                        req.lamports.unwrap_or(0) as f64 / 1e9,
++                        slippage,
++                        price,
++                        Some(true),
++                        route.market,
++                    )
++                    .await?
++            }
++            _ => {
++                let pct = if let Some(amount) = req.token_amount_raw {
++                    let (balance, _) = self
++                        .swaps
++                        .sol_hook
++                        .get_token_balance_raw(&user, &mint)
++                        .await?;
++                    ensure!(
++                        amount <= balance && balance > 0,
++                        "sell amount exceeds wallet balance"
++                    );
++                    (1..=100).find(|pct| balance.saturating_mul(*pct)/100 == amount)
++                        .context("this market cannot represent the exact partial position with an integer percentage")?
++                } else {
++                    pct
++                };
++                self.swaps
++                    .build_sell_instructions_for_user(
++                        &user,
++                        &mint,
++                        &route.pool,
++                        &route.creator,
++                        pct,
++                        slippage,
++                        price,
++                        route.market,
++                    )
++                    .await?
++            }
++        };
++        Ok(
++            json!({"market": route.market.as_str(), "pool": route.pool.to_string(),
++            "creator": route.creator.to_string(), "price": price, "priority_micro_lamports": fee,
++            "instructions": instructions.iter().map(instruction_json).collect::<Vec<_>>()}),
++        )
++    }
++}
++
++fn instruction_json(ix: &Instruction) -> Value {
++    json!({"program_id": ix.program_id.to_string(), "data": B64.encode(&ix.data),
++        "accounts": ix.accounts.iter().map(|a| json!({"pubkey": a.pubkey.to_string(),
++            "is_signer": a.is_signer, "is_writable": a.is_writable})).collect::<Vec<_>>()})
++}
++
++#[pyfunction]
++fn markets() -> Vec<&'static str> {
++    Swaps::default_market_priority()
++        .iter()
++        .map(Market::as_str)
++        .collect()
++}
++
++#[pyfunction]
++fn derive_pump_curve(mint: &str) -> PyResult<(String, u8)> {
++    let mint =
++        key(Some(mint), "mint").map_err(|_| PyValueError::new_err("invalid mint public key"))?;
++    let (pool, bump) = PumpFun::derive_bonding_curve_with_bump(&mint);
++    Ok((pool.to_string(), bump))
++}
++
++#[pyfunction]
++fn decode_pump_log(payload: &str, kind: &str) -> PyResult<Option<String>> {
++    let logs = [format!("Program data: {payload}")];
++    for event in PumpFun::parse_logs(logs.iter(), None) {
++        let value = match event {
++            PumpFunEvent::Trade(Some(e)) if kind == "trade" => json!({
++                "mint": e.mint.to_string(), "user": e.user.to_string(),
++                "sol_amount": e.sol_amount, "token_amount": e.token_amount,
++                "is_buy": e.is_buy, "timestamp": e.timestamp,
++                "virtual_sol_reserves": e.virtual_sol_reserves,
++                "virtual_token_reserves": e.virtual_token_reserves}),
++            PumpFunEvent::Create(Some(e)) if kind == "create" => json!({
++                "mint": e.mint.to_string(), "user": e.creator.to_string(),
++                "creator": e.creator.to_string(), "name": e.name, "symbol": e.symbol,
++                "uri": e.uri, "bonding_curve": e.bonding_curve.to_string()}),
++            _ => continue,
++        };
++        return Ok(Some(value.to_string()));
++    }
++    Ok(None)
++}
++
++#[pymodule]
++fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
++    m.add_class::<Client>()?;
++    m.add_function(wrap_pyfunction!(markets, m)?)?;
++    m.add_function(wrap_pyfunction!(decode_pump_log, m)?)?;
++    m.add_function(wrap_pyfunction!(price_from_logs, m)?)?;
++    m.add_function(wrap_pyfunction!(derive_pump_curve, m)?)?;
++    Ok(())
++}
++
++#[pyfunction]
++fn price_from_logs(logs: Vec<String>) -> Option<f64> {
++    for event in PumpFun::parse_logs(logs.iter(), None) {
++        if let PumpFunEvent::Trade(Some(trade)) = event {
++            let price = PumpFun::get_price(&trade);
++            if price.is_finite() && price > 0.0 {
++                return Some(price);
++            }
++        }
++    }
++    for log in &logs {
++        if let Some(price) = PumpSwap::price_from_log_line(log) {
++            return Some(price);
++        }
++    }
++    None
++}

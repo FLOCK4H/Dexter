@@ -1,3 +1,4 @@
+from dexter_network import create_http_session
 import asyncio
 import aiohttp
 import base58
@@ -23,13 +24,12 @@ except ImportError:
 
 LOG_DIR = 'dev/logs'
 
-logging.basicConfig(
+from dexter_logging import configure_root_logging
+
+configure_root_logging(
     format=f'{cc.LIGHT_CYAN}[Dexter] %(levelname)s - %(message)s{cc.RESET}',
     level=logging.INFO,
-    handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, 'swaps.log'), encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    log_file=os.path.join(LOG_DIR, 'swaps.log'),
 )
 
 class SolanaSwaps:
@@ -39,7 +39,7 @@ class SolanaSwaps:
         self.private_key = private_key
         self.api_key = api_key
         self.q_retry = 0
-        self.session = aiohttp.ClientSession()  # Persistent session
+        self.session = create_http_session()  # Persistent session
         self.async_client = AsyncClient(endpoint=self.rpc_endpoint)
         self.dexter = parent
         self.serializer = Interpreters()
@@ -139,6 +139,16 @@ class SolanaSwaps:
             "fee_lamports": int(meta.get("fee") or 0),
         }
 
+    def _wallet_token_delta(self, result: dict, mint: str) -> tuple[int, int]:
+        meta = result.get("meta") or {}
+        def balance(items):
+            return sum(int(item.get("uiTokenAmount", {}).get("amount", 0))
+                       for item in items if item.get("mint") == mint
+                       and item.get("owner") == self.wallet_address)
+        before = balance(meta.get("preTokenBalances") or [])
+        after = balance(meta.get("postTokenBalances") or [])
+        return after - before, after
+
     def _instruction_error_result(self, err: Any) -> str:
         instruction_error = err.get("InstructionError") if isinstance(err, dict) else None
         custom_code = None
@@ -185,7 +195,7 @@ class SolanaSwaps:
                         result = data['result']
                         meta = result.get("meta", {})
                         err = meta.get("err")
-                        if isinstance(err, dict) and err.get("InstructionError"):
+                        if err is not None:
                             logging.info(f"{cc.RED}Instruction error occurred for {tx_id}: {err}")
                             return self._instruction_error_result(err)
                         
@@ -199,10 +209,13 @@ class SolanaSwaps:
                                 if post_token_balance.get("mint") == mint_token:
                                     if post_token_balance.get('owner') == self.wallet_address:
                                         logging.info(f"Transaction verified for {tx_id}")
-                                        token_balance = post_token_balance.get("uiTokenAmount", {}).get("amount")
+                                        token_balance, wallet_token_balance = self._wallet_token_delta(result, mint_token)
+                                        if token_balance <= 0:
+                                            continue
                                         price = self.process_log(data)
                                         return {
                                             "balance": token_balance,
+                                            "wallet_token_balance": wallet_token_balance,
                                             "price": price,
                                             "sol_balance": wallet_balance_details["wallet_balance"],
                                             "wallet_balance": wallet_balance_details["wallet_balance"],
@@ -237,18 +250,7 @@ class SolanaSwaps:
         return None
 
     def process_log(self, data):
+        from dexter_sdk import price_from_logs
         logs = data.get("result", {}).get("meta", {}).get("logMessages", [])
-        for log in logs:
-            pdidx = log.find("Program data: ")
-            if "Program data: " in log:
-                log_data = self.serializer.parse_pumpfun_transaction(log[pdidx + len("Program data: "):])
-                if not isinstance(log_data, dict):
-                    continue
-                price = self.get_price(log_data)
-                return price
-        return None
-
-    def get_price(self, data):
-        vsr = Decimal(data.get("virtual_sol_reserves")) / Decimal('1e9')
-        vtr = Decimal(data.get("virtual_token_reserves")) / Decimal('1e6')
-        return vsr / vtr
+        price = price_from_logs(logs)
+        return Decimal(str(price)) if price else None

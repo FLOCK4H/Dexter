@@ -1,0 +1,5 @@
+# Keep distributed binaries and the checksummed upstream patch byte-exact.
+*.whl binary
+bindings/source.patch -text -whitespace
+*.md text eol=lf
+*.svg text eol=lf

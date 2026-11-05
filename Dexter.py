@@ -1,3 +1,8 @@
+if __name__ == "__main__":
+    from dexter_bootstrap import ensure_runtime
+    ensure_runtime()
+
+from dexter_network import create_http_session, rpc_websocket, subscribe_program_logs, SubmissionUncertain
 import argparse
 import asyncio
 import logging
@@ -36,9 +41,6 @@ from solders.keypair import Keypair  # type: ignore
 import websockets
 
 if __package__ in (None, ""):
-    from DexLab.pump_fun import PumpFun
-    from DexLab.pump_swap_executor import PumpSwapExecutor
-    from DexLab.pump_swap_market import PumpSwapMarket
     from DexLab.swaps import SolanaSwaps
     from DexLab.utils import (
         DEFAULT_PRIORITY_FEE_CLAMP_COMPUTE_UNITS,
@@ -48,9 +50,6 @@ if __package__ in (None, ""):
     )
     from DexLab.wsLogs import DexBetterLogs
 else:
-    from .DexLab.pump_fun import PumpFun
-    from .DexLab.pump_swap_executor import PumpSwapExecutor
-    from .DexLab.pump_swap_market import PumpSwapMarket
     from .DexLab.swaps import SolanaSwaps
     from .DexLab.utils import (
         DEFAULT_PRIORITY_FEE_CLAMP_COMPUTE_UNITS,
@@ -59,6 +58,7 @@ else:
         usd_to_lamports,
     )
     from .DexLab.wsLogs import DexBetterLogs
+from dexter_execution import NativeExecutor, NativeMarket as PumpSwapMarket
 from aiohttp import ClientConnectionError, ClientResponseError, ClientSession
 from dexter_config import (
     ensure_directories,
@@ -88,7 +88,7 @@ from dexter_time import (
 )
 import settings as legacy_settings
 from settings import *
-from solana.rpc.async_api import AsyncClient
+from dexter_network import RpcPoolClient as AsyncClient
 
 ROLLING_WINDOW_SIZE = 5
 SINGLE_LOCK = True
@@ -731,6 +731,17 @@ class Dexter:
                 return True
         return False
 
+    async def _apply_native_route(self, mint_id: str, route: dict):
+        mint_state = self.swap_folder[mint_id]
+        mint_state["market"] = route["market"]
+        mint_state["migration_pending"] = False
+        if route["market"] == "pump_swap":
+            mint_state["pump_swap_pool"] = route["pool"]
+            mint_state["pump_swap_creator"] = route["creator"]
+        if mint_id in self.holdings:
+            self.holdings[mint_id]["market"] = route["market"]
+            self._sync_managed_position(mint_id, status="open")
+
     async def _mark_pump_swap_pending(self, mint_id: str, *, reason: str, signature: str | None = None, slot: int | None = None):
         mint_state = self.swap_folder.get(mint_id)
         if not mint_state:
@@ -757,6 +768,8 @@ class Dexter:
         mint_state = self.swap_folder.get(mint_id)
         if not mint_state:
             return
+        if mint_id in self.holdings:
+            self.holdings[mint_id]["market"] = "pump_swap"
         mint_state["market"] = "pump_swap"
         mint_state["migration_pending"] = False
         mint_state["pump_swap_pool"] = pool_state.pool
@@ -1196,6 +1209,12 @@ class Dexter:
     async def _submit_pump_swap_sell(self, mint_id, amount, owner, fee, *, sim=False):
         if self.pump_swap_executor is None:
             return "pump_swap_unavailable"
+
+        if isinstance(self.pump_swap_executor, NativeExecutor):
+            return await self.pump_swap_executor.pump_sell(
+                mint_id, int(amount or 0), pool="auto", creator=owner,
+                sim=sim, priority_micro_lamports=fee, slippage=float(SLIPPAGE_AMOUNT),
+            )
 
         mint_state = self.swap_folder.get(mint_id, {})
         await self._refresh_pump_swap_market_for_mint(
@@ -1929,6 +1948,8 @@ class Dexter:
                 buy_price=buy_price,
                 shadow_position=shadow_position,
                 cost_basis_lamports=int(self.session_seed.get("cost_basis_lamports", 0) or 0) or None,
+                pending_buy_tx=self.session_seed.get("pending_buy_tx"),
+                pending_sell_tx=self.session_seed.get("pending_sell_tx"),
             )
             self._sync_managed_position(mint_id, status="open")
             await self._phase2_record_holding_snapshot(mint_id, "seeded_buy")
@@ -1954,21 +1975,9 @@ class Dexter:
             if self.leaderboard is not None:
                 ws = None
                 try:
-                    async with websockets.connect(self.ws_url, ping_interval=2, ping_timeout=15) as ws:
-                        await ws.send(json.dumps(
-                            {
-                                "jsonrpc": "2.0",
-                                "method": "logsSubscribe",
-                                "id": 1,
-                                "params": [
-                                    {"mentions": [program]},
-                                    {"commitment": "processed"}
-                                ]
-                            }))
-                        response = json.loads(await ws.recv())
-
-                        if 'result' in response:
-                            logging.info("Dexter successfully connected to Solana's Network ✔")
+                    async with rpc_websocket(self.ws_url,label='trader:'+program) as ws:
+                        await subscribe_program_logs(ws,program)
+                        logging.info("Dexter successfully connected to Solana's Network ✔")
 
                         async for message in ws:
                             if self.stop_event.is_set():
@@ -1976,15 +1985,10 @@ class Dexter:
                             hMessage = json.loads(message)
                             await self.logs.put([hMessage, program])
 
-                except websockets.ConnectionClosedError:
+                except (OSError,TimeoutError,websockets.WebSocketException) as exc:
                     if self.stop_event.is_set():
                         break
-                    logging.error(f"{cc.RED}Connection closed when subscribing to {program}.{cc.RESET}")
-                    await asyncio.sleep(5)
-                except TimeoutError:
-                    if self.stop_event.is_set():
-                        break
-                    logging.error(f"{cc.RED}TimeoutError when subscribing to {program}.{cc.RESET}")
+                    logging.warning("Trader subscription reconnecting program=%s reason=%s",program,type(exc).__name__)
                     await asyncio.sleep(5)
                 except Exception as e:
                     if self._is_expected_shutdown_error(e):
@@ -1992,8 +1996,6 @@ class Dexter:
                     logging.error(f"{cc.RED}Error when subscribing to {program}, {e}{cc.RESET}")
                     traceback.print_exc()
                 finally:
-                    if ws:
-                        await ws.close()
                     if not self.stop_event.is_set():
                         await asyncio.sleep(1)
             else:
@@ -2243,6 +2245,8 @@ class Dexter:
             ),
             "bonding_curve": swap_state.get("bonding_curve") or existing.get("bonding_curve"),
             "token_balance": token_balance,
+            "pending_buy_tx": holding.get("pending_buy_tx") if holding else existing.get("pending_buy_tx"),
+            "pending_sell_tx": holding.get("pending_sell_tx") if holding else existing.get("pending_sell_tx"),
             "buy_price": str(buy_price) if buy_price not in (None, "") else None,
             "current_price": str(current_price) if current_price not in (None, "") else None,
             "last_price": str(current_price) if current_price not in (None, "") else None,
@@ -2361,6 +2365,10 @@ class Dexter:
             return None
         if curve_state is None:
             return None
+        if getattr(curve_state, "complete", False):
+            await self._mark_pump_swap_pending(mint_id, reason="curve_complete")
+            await self._refresh_pump_swap_market_for_mint(mint_id, force_lookup=True, force_refresh=True)
+            return await self.get_latest_price(mint_id)
         price = await self._compute_price(
             getattr(curve_state, "virtual_sol_reserves", 0),
             getattr(curve_state, "virtual_token_reserves", 0),
@@ -2389,26 +2397,15 @@ class Dexter:
         lamports: int,
         fallback_price: Decimal,
     ) -> tuple[int, Decimal]:
-        if self.pump_swap is not None and bonding_curve:
+        if isinstance(self.pump_swap, NativeExecutor):
             try:
-                from DexLab.pump_fun.pump_swap import PublicKey  # type: ignore
-            except Exception:
-                PublicKey = None  # type: ignore[assignment]
-            if PublicKey is not None:
-                try:
-                    curve_state, _creator_vault = await self.pump_swap.get_curve_context(
-                        PublicKey.from_string(bonding_curve),
-                        fallback_creator=owner,
-                        allow_creator_fallback=True,
-                    )
-                    estimated_tokens = self.pump_swap.quote_buy_exact_sol_in_tokens_out(curve_state, lamports)
-                    shadow_price = fallback_price
-                    if estimated_tokens > 0:
-                        shadow_price = Decimal(str(lamports)) / Decimal("1000000000")
-                        shadow_price = shadow_price / (Decimal(int(estimated_tokens)) / Decimal("1000000"))
-                        return int(estimated_tokens), shadow_price
-                except Exception:
-                    pass
+                estimated_tokens = await self.pump_swap.quote_buy(mint_id, lamports)
+                if estimated_tokens > 0:
+                    shadow_price = Decimal(lamports) / Decimal("1000000000")
+                    shadow_price /= Decimal(estimated_tokens) / Decimal("1000000")
+                    return estimated_tokens, shadow_price
+            except ValueError:
+                pass
 
         shadow_price = fallback_price if fallback_price > 0 else Decimal("0.000000001")
         estimated_tokens = 1
@@ -2586,22 +2583,7 @@ class Dexter:
             holding, token_balance, buy_price = await self._resolve_position_for_shutdown(mint_id)
 
             if token_balance <= 0 or buy_price <= 0:
-                released_lamports = self._release_buy_spend(mint_id)
-                if released_lamports > 0:
-                    logging.warning(
-                        "Released %s lamports reserved for %s during %s because no confirmed position was found.",
-                        released_lamports,
-                        mint_id,
-                        reason,
-                    )
-                self.holdings.pop(mint_id, None)
-                self._mark_managed_position_closed(
-                    mint_id,
-                    reason=f"{reason}_unresolved",
-                    sell_proceeds_lamports=0,
-                )
-                await self._phase2_close_session(mint_id, status="cleared", reason=f"{reason}_unresolved")
-                self.swap_folder.pop(mint_id, None)
+                self._sync_managed_position(mint_id, status="pending" if holding.get("pending_buy_tx") else "open")
                 unresolved.append(mint_id)
                 continue
 
@@ -2630,7 +2612,7 @@ class Dexter:
 
         if unresolved:
             logging.warning(
-                "Cleared unresolved positions during %s: %s",
+                "Preserved unresolved positions during %s for recovery: %s",
                 reason,
                 ", ".join(unresolved),
             )
@@ -2659,6 +2641,7 @@ class Dexter:
             return Decimal('0')
 
     async def buy(self, mint_id, trust_level, owner):
+        order_id = None
         try:
             session_id = await self._phase2_start_session(
                 mint_id,
@@ -2692,9 +2675,9 @@ class Dexter:
                 shadow_position=False,
                 session_id=session_id,
             )
-            bonding_curve = self.swap_folder.get(mint_id, {})["bonding_curve"]
+            bonding_curve = self.swap_folder.get(mint_id, {}).get("bonding_curve")
 
-            if not bonding_curve:
+            if not bonding_curve and not isinstance(self.pump_swap, NativeExecutor):
                 logging.info(f"{cc.RED}Bonding curve not found for {mint_id}.{cc.RESET}")
                 self.holdings.pop(mint_id, None)
                 return
@@ -2860,6 +2843,9 @@ class Dexter:
                         priority_micro_lamports=fee,
                         slippage=slippage,
                     )
+                    if simulation_result == "migration_pending":
+                        await self._mark_pump_swap_pending(mint_id, reason="route_pending")
+                        return "migration_pending"
                     value = getattr(simulation_result, "value", None)
                     if value is not None and getattr(value, "err", None):
                         self.holdings.pop(mint_id, None)
@@ -2950,6 +2936,12 @@ class Dexter:
                 priority_micro_lamports=fee,
                 slippage=slippage
             )
+            if tx_id == "migration_pending":
+                await self._mark_pump_swap_pending(mint_id, reason="route_pending")
+                if self.phase2 is not None and order_id is not None:
+                    await self.phase2.update_order(order_id, status="cancelled", context={"result": tx_id})
+                return "migration_pending"
+
             if tx_id == "migrated":
                 logging.info(f"{cc.RED}Bonding curve migrated for {mint_id}. Ending session.{cc.RESET}")
                 self.holdings.pop(mint_id, None)
@@ -3050,6 +3042,17 @@ class Dexter:
             self._log_exposure_summary("buy-submitted")
             return tx_id
         
+        except SubmissionUncertain as exc:
+            self._reserve_buy_spend(mint_id, reserved_cost)
+            self._update_holding(mint_id, owner=owner, trust_level=trust_level,
+                pending_buy_tx=exc.signature, buy_price=price if price > 0 else None,
+                buy_order_id=order_id, shadow_position=False)
+            self._sync_managed_position(mint_id, status="pending")
+            if self.phase2 is not None and order_id is not None:
+                await self.phase2.update_order(order_id, status="submitted", tx_id=exc.signature)
+            logging.warning("Buy submission uncertain for %s; preserving signature %s.", mint_id, exc.signature)
+            return exc.signature
+
         except Exception as e:
             self._release_buy_spend(mint_id)
             self.holdings.pop(mint_id, None)
@@ -3072,6 +3075,7 @@ class Dexter:
             return "buy_failed"
 
     async def sell(self, mint_id, amount, reason, owner, trust_level, buy_price):
+        order_id = None
         try:
             logging.info(f"{cc.LIGHT_MAGENTA}Initiating sell for {mint_id}.")
             session_id = self._phase2_session_id(mint_id)
@@ -3081,9 +3085,8 @@ class Dexter:
 
             mint_state = self.swap_folder.get(mint_id, {})
             bonding_curve = mint_state.get("bonding_curve")
-            if not bonding_curve and market_source != "pump_swap" and not mint_state.get("migration_pending"):
+            if not bonding_curve and market_source != "pump_swap" and not mint_state.get("migration_pending") and not isinstance(self.pump_swap, NativeExecutor):
                 logging.info(f"{cc.RED}Bonding curve not found for {mint_id}.{cc.RESET}")
-                self.holdings.pop(mint_id, None)
                 await self._phase2_record_decision(
                     mint_id,
                     owner,
@@ -3094,7 +3097,6 @@ class Dexter:
 
             if self.runtime_mode == "read_only":
                 logging.info(f"{cc.YELLOW}Read-only mode blocked sell for {mint_id}.{cc.RESET}")
-                self.holdings.pop(mint_id, None)
                 await self._phase2_record_decision(
                     mint_id,
                     owner,
@@ -3247,37 +3249,10 @@ class Dexter:
             
             if mint_id in self.holdings:
                 tx_id_sell = None
-                if market_source == "pump_swap" or self.swap_folder.get(mint_id, {}).get("migration_pending"):
-                    self._announce_mev_trade(side="sell", mint_id=mint_id, venue="pump_swap")
-                    tx_id_sell = await self._submit_pump_swap_sell(
-                        mint_id,
-                        amount,
-                        owner,
-                        fee,
-                        sim=False,
-                    )
-                    sell_venue = "pump_swap"
+                if holding.get("pending_sell_tx"):
+                    tx_id_sell = holding["pending_sell_tx"]
                 else:
-                    self._announce_mev_trade(side="sell", mint_id=mint_id, venue="pump_fun")
-                    tx_id_sell = await self.pump_swap.pump_sell(
-                        mint_id,
-                        bonding_curve,
-                        amount,
-                        0,
-                        owner,
-                        False,
-                        fee
-                    )
-                    if tx_id_sell == "migrated":
-                        await self._mark_pump_swap_pending(
-                            mint_id,
-                            reason="pump_fun_sell_migrated",
-                        )
-                        await self._refresh_pump_swap_market_for_mint(
-                            mint_id,
-                            force_lookup=True,
-                            force_refresh=True,
-                        )
+                    if market_source == "pump_swap" or self.swap_folder.get(mint_id, {}).get("migration_pending"):
                         self._announce_mev_trade(side="sell", mint_id=mint_id, venue="pump_swap")
                         tx_id_sell = await self._submit_pump_swap_sell(
                             mint_id,
@@ -3287,19 +3262,58 @@ class Dexter:
                             sim=False,
                         )
                         sell_venue = "pump_swap"
-                        if tx_id_sell in {"pump_swap_unavailable", "pump_swap_pool_unavailable"}:
+                    else:
+                        self._announce_mev_trade(side="sell", mint_id=mint_id, venue="pump_fun")
+                        tx_id_sell = await self.pump_swap.pump_sell(
+                            mint_id,
+                            bonding_curve,
+                            amount,
+                            0,
+                            owner,
+                            False,
+                            fee
+                        )
+                        if tx_id_sell == "migrated":
+                            await self._mark_pump_swap_pending(
+                                mint_id,
+                                reason="pump_fun_sell_migrated",
+                            )
+                            await self._refresh_pump_swap_market_for_mint(
+                                mint_id,
+                                force_lookup=True,
+                                force_refresh=True,
+                            )
+                            self._announce_mev_trade(side="sell", mint_id=mint_id, venue="pump_swap")
+                            tx_id_sell = await self._submit_pump_swap_sell(
+                                mint_id,
+                                amount,
+                                owner,
+                                fee,
+                                sim=False,
+                            )
+                            sell_venue = "pump_swap"
+                            if tx_id_sell in {"pump_swap_unavailable", "pump_swap_pool_unavailable"}:
+                                logging.info(
+                                    f"{cc.YELLOW}Bonding curve migrated for {mint_id} to PumpSwapAMM. "
+                                    f"Switching session price tracking to PumpSwap.{cc.RESET}"
+                                )
+                                if self.phase2 is not None and order_id is not None:
+                                    await self.phase2.update_order(order_id, status="cancelled", context={"result": tx_id_sell})
+                                await self._phase2_record_risk_event(mint_id, owner, "migration_pending_exit", "warn", tx_id_sell)
+                                return "migrated_monitoring"
                             logging.info(
                                 f"{cc.YELLOW}Bonding curve migrated for {mint_id} to PumpSwapAMM. "
-                                f"Switching session price tracking to PumpSwap.{cc.RESET}"
+                                f"Submitting exit through PumpSwap.{cc.RESET}"
                             )
-                            if self.phase2 is not None and order_id is not None:
-                                await self.phase2.update_order(order_id, status="cancelled", context={"result": tx_id_sell})
-                            await self._phase2_record_risk_event(mint_id, owner, "migration_pending_exit", "warn", tx_id_sell)
-                            return "migrated_monitoring"
-                        logging.info(
-                            f"{cc.YELLOW}Bonding curve migrated for {mint_id} to PumpSwapAMM. "
-                            f"Submitting exit through PumpSwap.{cc.RESET}"
-                        )
+
+                if tx_id_sell == "migration_pending":
+                    await self._mark_pump_swap_pending(mint_id, reason="exit_pending")
+                    self._sync_managed_position(mint_id, status="open")
+                    if self.phase2 is not None and order_id is not None:
+                        await self.phase2.update_order(order_id, status="cancelled", context={"result": tx_id_sell})
+                    return "migrated_monitoring"
+                if isinstance(self.pump_swap, NativeExecutor) and self.pump_swap.last_build:
+                    sell_venue = self.pump_swap.last_build["market"]
 
                 if tx_id_sell == "missing_ata":
                     logging.info(f"{cc.RED}Skipping sell for {mint_id}: associated token account is missing.{cc.RESET}")
@@ -3332,6 +3346,8 @@ class Dexter:
                     await self._phase2_record_risk_event(mint_id, owner, "sell_failed", "warn", str(tx_id_sell))
                     return tx_id_sell
 
+                self.holdings[mint_id]["pending_sell_tx"] = tx_id_sell
+                self._sync_managed_position(mint_id, status="open")
                 if self.phase2 is not None and order_id is not None:
                     await self.phase2.update_order(order_id, status="submitted", tx_id=tx_id_sell)
 
@@ -3343,6 +3359,8 @@ class Dexter:
                 )
 
                 if isinstance(results, str) and results.startswith("InstructionError"):
+                    self.holdings[mint_id]["pending_sell_tx"] = None
+                    self._sync_managed_position(mint_id, status="open")
                     normalized_result, detail = self._normalize_sell_instruction_error(sell_venue, results)
                     instruction_error_code = _parse_instruction_error_code(results)
                     logging.warning(f"{cc.YELLOW}Sell failed for {mint_id}: {detail}{cc.RESET}")
@@ -3482,6 +3500,14 @@ class Dexter:
                 await self._validate_result(owner, reason)
                 self._log_exposure_summary("sell-complete")
                 return "sold"
+
+        except SubmissionUncertain as exc:
+            self.holdings[mint_id]["pending_sell_tx"] = exc.signature
+            self._sync_managed_position(mint_id, status="open")
+            if self.phase2 is not None and order_id is not None:
+                await self.phase2.update_order(order_id, status="submitted", tx_id=exc.signature)
+            logging.warning("Sell submission uncertain for %s; preserving signature %s.", mint_id, exc.signature)
+            return "sell_unconfirmed"
 
         except Exception as e:
             logging.error(f"Sell transaction failed: {e}")
@@ -3694,9 +3720,8 @@ class Dexter:
                                 logging.info(f"{cc.RED}Buy retry exceeded for {mint_id}.\nTrying a fallback...{cc.RESET}")
                                 results = await self.swaps.get_swap_tx(buy_tx_id, mint_id, tx_type="buy")
                                 if not results or isinstance(results, str):
-                                    self._release_buy_spend(mint_id)
-                                    self.holdings.pop(mint_id, None)
-                                    logging.info(f"{cc.BLINK}Buy was not successful :( {mint_id}{cc.RESET}")
+                                    self._sync_managed_position(mint_id, status="pending")
+                                    logging.warning("Buy confirmation unresolved for %s; preserving its signature and position.", mint_id)
                                     break
                                 token_balance = int(results.get("balance", 0))
                                 selfBuyPrice = Decimal(results.get("price", 0))
@@ -3704,8 +3729,7 @@ class Dexter:
                                 confirmed_cost_lamports = int(results.get("cost_lamports", 0) or 0)
                                 confirmed_buy_fee_lamports = int(results.get("fee_lamports", 0) or 0)
                                 if token_balance <= 0 or selfBuyPrice <= 0:
-                                    self._release_buy_spend(mint_id)
-                                    self.holdings.pop(mint_id, None)
+                                    self._sync_managed_position(mint_id, status="pending")
                                     break
                             if token_balance <= 0 or selfBuyPrice <= 0:
                                 buy_retry += 1
@@ -4049,23 +4073,17 @@ class Dexter:
                 logging.warning(message)
 
             if self.runtime_mode != "read_only":
-                self.session = ClientSession()
+                self.session = create_http_session()
                 self.async_client = AsyncClient(self.http_url)
                 self.pump_swap_market = PumpSwapMarket(self.session, self.http_url)
 
             if self.execution_mode in {"paper", "simulate", "live"} and self.config.rpc.private_key:
-                self.pump_swap = PumpFun(
-                    self.session,
-                    self.config.rpc.private_key,
-                    async_client=self.async_client,
-                    mev_config=self.active_mev_config,
+                self.pump_swap = NativeExecutor(
+                    self.session, self.config.rpc.private_key, self.async_client,
+                    mev_config=self.active_mev_config, market=self.pump_swap_market,
+                    allow_live_send=self.live_send_enabled, on_route=self._apply_native_route,
                 )
-                self.pump_swap_executor = PumpSwapExecutor(
-                    self.pump_swap_market,
-                    self.config.rpc.private_key,
-                    async_client=self.async_client,
-                    mev_config=self.active_mev_config,
-                )
+                self.pump_swap_executor = self.pump_swap
             elif self.execution_mode in {"paper", "simulate", "live"}:
                 logging.warning(
                     "No PRIVATE_KEY is configured, so Dexter cannot fetch on-chain shadow quotes for %s mode.",
@@ -4188,8 +4206,6 @@ class Dexter:
             if self.pump_swap:
                 await self.pump_swap.close()
                 self.pump_swap = None
-                self.async_client = None
-                self.session = None
             await self.close_db_pool()
             if self.swaps:
                 await self.swaps.close()
@@ -4267,6 +4283,8 @@ async def _liquidate_managed_position_async(
         "token_balance": int(position.get("token_balance", 0) or 0),
         "cost_basis_lamports": int(position.get("cost_basis_lamports", 0) or 0),
         "market": position.get("market", "pump_fun"),
+        "pending_buy_tx": position.get("pending_buy_tx"),
+        "pending_sell_tx": position.get("pending_sell_tx"),
         "shadow_position": bool(position.get("shadow_position", False)),
         "skip_database": True,
     }
@@ -4276,21 +4294,17 @@ async def _liquidate_managed_position_async(
 
     try:
         if trader.runtime_mode != "read_only":
-            trader.session = ClientSession()
+            trader.session = create_http_session()
             trader.async_client = AsyncClient(trader.http_url)
             trader.pump_swap_market = PumpSwapMarket(trader.session, trader.http_url)
 
         if trader.execution_mode in {"paper", "simulate", "live"} and config.rpc.private_key:
-            trader.pump_swap = PumpFun(
-                trader.session,
-                config.rpc.private_key,
-                async_client=trader.async_client,
+            trader.pump_swap = NativeExecutor(
+                trader.session, config.rpc.private_key, trader.async_client,
+                mev_config=trader.active_mev_config, market=trader.pump_swap_market,
+                allow_live_send=trader.live_send_enabled, on_route=trader._apply_native_route,
             )
-            trader.pump_swap_executor = PumpSwapExecutor(
-                trader.pump_swap_market,
-                config.rpc.private_key,
-                async_client=trader.async_client,
-            )
+            trader.pump_swap_executor = trader.pump_swap
 
         if trader.runtime_mode == "live":
             trader.swaps = SolanaSwaps(
@@ -4378,6 +4392,7 @@ class TuiOption:
     label: str
     value: str
     detail: str = ""
+    shortcut: str = ""
 
 
 @dataclass(frozen=True)
@@ -4449,7 +4464,7 @@ TUI_SETTINGS_FIELDS: dict[str, SettingsFieldSpec] = {
     "DEXTER_TRADING_PRIVATE_KEY": SettingsFieldSpec(
         "DEXTER_TRADING_PRIVATE_KEY",
         "Trading private key",
-        "Optional explicit override for the trading signer. Leave empty to fall back to PRIVATE_KEY.",
+        "Optional explicit override for the trading signer. Leave empty to use PRIVATE_KEY from Dexter’s own .env.",
         secret=True,
     ),
     "DEXTER_HOT_PRIVATE_KEY": SettingsFieldSpec(
@@ -4603,18 +4618,22 @@ TUI_SETTINGS_FIELDS: dict[str, SettingsFieldSpec] = {
         aliases=("DEXTER_PHASE2_EXPORT_DIR",),
     ),
 }
+TUI_SETTINGS_FIELDS.update({
+    "HTTP_URLS": SettingsFieldSpec("HTTP_URLS", "HTTP RPC providers", "Comma-separated Solana HTTP endpoints in failover order. All must use the same network."),
+    "WS_URLS": SettingsFieldSpec("WS_URLS", "WebSocket providers", "Comma-separated WebSocket endpoints in failover order."),
+    "DEXTER_START_ACTION": SettingsFieldSpec("DEXTER_START_ACTION", "On launch", "Open the home screen, or immediately run one configured task.", kind="choice", options=("menu","trade","collector","analyze","doctor")),
+    "DEXTER_AUTO_SETUP": SettingsFieldSpec("DEXTER_AUTO_SETUP", "Prepare Python automatically", "Install missing app dependencies and the packaged native binding on launch.", kind="bool"),
+    "DEXTER_AUTO_DATABASE": SettingsFieldSpec("DEXTER_AUTO_DATABASE", "Prepare local database", "Prepare or start Dexter's isolated database when a runtime launches.", kind="bool"),
+})
 TUI_SETTINGS_FIELDS.update(_legacy_tui_settings_fields())
 
 TUI_SETTINGS_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "Quick Setup",
         (
-            "DEXTER_NETWORK",
-            "DEXTER_RUNTIME_MODE",
-            "PRIVATE_KEY",
-            "DATABASE_URL",
-            "HTTP_URL",
-            "WS_URL",
+            "DEXTER_RUNTIME_MODE", "DEXTER_NETWORK", "PRIVATE_KEY", "HTTP_URLS", "WS_URLS",
+            "AMOUNT_BUY_TL_1", "AMOUNT_BUY_TL_2", "DEXTER_MAX_CONCURRENT_SESSIONS",
+            "DEXTER_START_ACTION", "DEXTER_AUTO_SETUP", "DEXTER_AUTO_DATABASE",
         ),
     ),
     *_legacy_tui_settings_sections(),
@@ -4680,7 +4699,7 @@ def _dedupe_strings(values: list[str]) -> list[str]:
 
 def _coalesce_env_value(env_values: dict[str, str], *keys: str) -> str:
     for key in keys:
-        value = (env_values.get(key) or "").strip()
+        value = (env_values.get(key) or os.getenv(key) or "").strip()
         if value:
             return value
     return ""
@@ -4826,9 +4845,9 @@ def onboarding_fields_for_intent(
         if database_config_needs_setup(env_values):
             keys.append("DATABASE_URL")
         if network == "mainnet":
-            if env_value_needs_setup("HTTP_URL", env_values.get("HTTP_URL")):
+            if env_value_needs_setup("HTTP_URL", _coalesce_env_value(env_values,"HTTP_URL","HTTP_URLS")):
                 keys.append("HTTP_URL")
-            if env_value_needs_setup("WS_URL", env_values.get("WS_URL")):
+            if env_value_needs_setup("WS_URL", _coalesce_env_value(env_values,"WS_URL","WS_URLS")):
                 keys.append("WS_URL")
         return _dedupe_strings(keys)
 
@@ -4843,9 +4862,9 @@ def onboarding_fields_for_intent(
     if needs_database and database_config_needs_setup(env_values):
         keys.append("DATABASE_URL")
     if network == "mainnet":
-        if env_value_needs_setup("HTTP_URL", env_values.get("HTTP_URL")):
+        if env_value_needs_setup("HTTP_URL", _coalesce_env_value(env_values,"HTTP_URL","HTTP_URLS")):
             keys.append("HTTP_URL")
-        if env_value_needs_setup("WS_URL", env_values.get("WS_URL")):
+        if env_value_needs_setup("WS_URL", _coalesce_env_value(env_values,"WS_URL","WS_URLS")):
             keys.append("WS_URL")
     return _dedupe_strings(keys)
 
@@ -5120,27 +5139,33 @@ class InteractiveDexterCLI:
         except curses.error:
             pass
 
+    def _header_summary(self, config, width=100):
+        if config is None:
+            return "Setup needed · Open Settings to finish configuration"
+        execution = resolve_trade_execution_mode(config)
+        mode = config.runtime.mode.replace("read_only", "Observe").title()
+        sends = "LIVE SENDS" if execution == "live" else "no sends"
+        wallet = self._wallet_label(config).replace("wallet=", "")
+        balance = self._balance_line(config).replace("balance=", "")
+        counts = self._managed_position_counts(config)
+        if width < 70:
+            return f"{config.runtime.network.title()} {mode} · {sends} | {wallet}"
+        return f"{config.runtime.network.title()}  {mode} · {sends}  |  {wallet}  {balance}  |  Open {counts['open']}"
+
     def _draw_header(self, title: str, config, *, config_error: str | None = None) -> int:
         if self.screen is None:
             return 0
         self.screen.erase()
         self._click_regions = []
         height, width = self.screen.getmaxyx()
-        border = "═" * max(8, width - 4)
-        self._write(1, 2, "DEXTER 3.0", self._attr("title"))
-        self._write(2, 2, title, self._attr("selected"))
-        if config is not None:
-            counts = self._managed_position_counts(config)
-            summary = (
-                f"network={config.runtime.network}  mode={config.runtime.mode}  "
-                f"{self._wallet_label(config)}  {self._balance_line(config)}  "
-                f"positions=open:{counts['open']} pending:{counts['pending']} closed:{counts['closed']}"
-            )
-            self._write(4, 2, summary, self._attr("muted"))
-        elif config_error:
-            self._write(4, 2, f"config_error={config_error}", self._attr("error"))
-        self._write(5, 2, border[: max(8, width - 4)], self._attr("muted"))
-        return 7
+        self._write(0, 1, "DEXTER", self._attr("title"))
+        self._write(0, 10, title, curses.A_BOLD)
+        summary = self._header_summary(config, width)
+        self._write(1, 1, summary, self._attr("warning" if "LIVE SENDS" in summary else "muted"))
+        self._write(2, 1, "─" * max(0, width-3), self._attr("muted"))
+        if config_error:
+            self._write(3, 2, config_error, self._attr("error"))
+        return 4 if height >= 20 else 3
 
     def _draw_footer(self, lines: list[str]) -> None:
         if self.screen is None:
@@ -5153,37 +5178,8 @@ class InteractiveDexterCLI:
             self._write(y, 2, line[: max(0, width - 4)], self._attr("muted"))
 
     def _show_splash_tui(self) -> None:
-        if self.screen is None:
-            return
-        art = [
-            "██████╗ ███████╗██╗  ██╗████████╗███████╗██████╗ ",
-            "██╔══██╗██╔════╝╚██╗██╔╝╚══██╔══╝██╔════╝██╔══██╗",
-            "██║  ██║█████╗   ╚███╔╝    ██║   █████╗  ██████╔╝",
-            "██║  ██║██╔══╝   ██╔██╗    ██║   ██╔══╝  ██╔══██╗",
-            "██████╔╝███████╗██╔╝ ██╗   ██║   ███████╗██║  ██║",
-            "╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝",
-        ]
-        taglines = (
-            f"BLOODY FAST.",
-        )
-        height, width = self.screen.getmaxyx()
-        steps = 12
-        for idx in range(steps + 1):
-            self.screen.erase()
-            top = max(1, (height - len(art) - len(taglines) - 6) // 2)
-            for line_index, line in enumerate(art):
-                x = max(2, (width - len(line)) // 2)
-                self._write(top + line_index, x, line, self._attr("title"))
-            for line_index, line in enumerate(taglines):
-                x = max(2, (width - len(line)) // 2)
-                self._write(top + len(art) + 1 + line_index, x, line, self._attr("muted"))
-            progress = idx / steps
-            filled = int(progress * 28)
-            bar = "[" + ("#" * filled) + (" " * (28 - filled)) + "]"
-            status = f"{CLI_SPLASH_FRAMES[idx % len(CLI_SPLASH_FRAMES)]} loading {bar}"
-            self._write(top + len(art) + len(taglines) + 3, max(2, (width - len(status)) // 2), status, self._attr("success"))
-            self.screen.refresh()
-            time.sleep(0.05)
+        # Opening a task surface is immediate; no blocking splash animation.
+        return
 
     def _default_index(self, options: list[TuiOption], value: str | None) -> int:
         if value is None:
@@ -5230,113 +5226,96 @@ class InteractiveDexterCLI:
             return max(0, end - visible_rows + 1)
         return max(0, scroll_top)
 
-    def _choose(
-        self,
-        title: str,
-        options: list[TuiOption],
-        *,
-        intro: list[str] | None = None,
-        config=None,
-        config_error: str | None = None,
-        default_value: str | None = None,
-        allow_escape: bool = True,
-    ) -> str | None:
-        if self.screen is None:
+    def _choose(self, title, options, *, intro=None, config=None, config_error=None,
+                default_value=None, allow_escape=True):
+        from dexter_tui import compose_menu
+        if self.screen is None or not options:
             return None
-        selected = self._default_index(options, default_value)
-        scroll_top = 0
+        original = list(options)
+        selected = self._default_index(original, default_value)
+        query = ""
+        filtering = False
         while True:
-            y = self._draw_header(title, config, config_error=config_error)
+            visible = [option for option in original if query.lower() in (option.label+" "+option.detail).lower()]
+            if not visible:
+                visible = [TuiOption("No matching items", "__empty", "Press Esc to clear the search.")]
+            selected = min(selected, len(visible)-1)
             height, width = self.screen.getmaxyx()
-            body_width = max(24, width - 8)
-            if intro:
-                for line in intro:
-                    for wrapped in self._wrap(line, body_width):
-                        self._write(y, 2, wrapped)
-                        y += 1
-                y += 1
-            footer_lines = ["Use ↑/↓ to move, Enter to select, click to choose."]
-            if allow_escape:
-                footer_lines.append("Press q or Esc to go back.")
-            if self.status_message:
-                footer_lines.append(self.status_message)
-            rows, option_bounds = self._build_choice_rows(options, body_width=body_width)
-            visible_rows = max(1, height - y - len(footer_lines) - 2)
-            if len(rows) > visible_rows:
-                insert_at = len(footer_lines) - 1 if self.status_message else len(footer_lines)
-                footer_lines.insert(insert_at, "")
-            visible_rows = max(1, height - y - len(footer_lines) - 2)
-            scroll_top = self._scroll_choice_view(
-                option_bounds,
-                selected=selected,
-                scroll_top=scroll_top,
-                visible_rows=visible_rows,
-            )
-            max_scroll_top = max(0, len(rows) - visible_rows)
-            scroll_top = min(scroll_top, max_scroll_top)
-            hidden_above = scroll_top > 0
-            hidden_below = (scroll_top + visible_rows) < len(rows)
-            if len(rows) > visible_rows:
-                hints: list[str] = []
-                if hidden_above:
-                    hints.append("↑ above")
-                if hidden_below:
-                    hints.append("↓ below")
-                footer_lines[-2 if self.status_message else -1] = (
-                    f"More content: {'  '.join(hints)}" if hints else "More content is available."
-                )
-            visible_row_slice = rows[scroll_top:scroll_top + visible_rows]
-            for row_offset, (kind, option_index, indent, text) in enumerate(visible_row_slice):
-                row_y = y + row_offset
-                if kind == "spacer":
-                    continue
-                if option_index is None:
-                    continue
-                option = options[option_index]
-                if kind == "label":
-                    prefix = ">" if option_index == selected else " "
-                    rendered = f"{prefix} {text}"
-                    attr = self._attr("selected") if option_index == selected else 0
-                else:
-                    rendered = text
-                    attr = self._attr("title") if option_index == selected else self._attr("muted")
-                self._write(row_y, indent, rendered, attr)
-                self._register_click(
-                    row_y,
-                    indent,
-                    row_y,
-                    min(width - 3, indent + len(rendered)),
-                    option.value,
-                )
-            self._draw_footer(footer_lines)
+            details = []
+            if title == "Home" and config is not None:
+                details = [
+                    f"Start the trader using your saved {config.runtime.mode} settings on {config.runtime.network}.",
+                    "Wallet, network and trade size are set in Quick setup. No launch questions when the setup is complete.",
+                    "Positions stay available for recovery if the market migrates or an RPC goes offline.",
+                ]
+            frame = compose_menu(width, height, title=title, options=visible, selected=selected,
+                summary=self._header_summary(config, width), intro=intro or [],
+                status=self.status_message or (config_error or ""), filter_text=query,
+                filtering=filtering, detail_lines=details, status_role="error" if config_error else "success")
+            self.screen.erase()
+            self._click_regions = frame.clicks
+            for span in frame.spans:
+                attr = curses.A_BOLD if span.role == "heading" else self._attr(span.role)
+                self._write(span.y, span.x, span.text, attr)
             self.screen.refresh()
-            key = self.screen.get_wch()
+            try:
+                self.screen.timeout(250)
+                key = self.screen.get_wch()
+            except curses.error:
+                continue
+            finally:
+                self.screen.timeout(-1)
+            if key == curses.KEY_RESIZE:
+                continue
+            if key == "/" and not filtering:
+                filtering = True
+                continue
+            if key == "\x1b" and (filtering or query):
+                filtering = False
+                query = ""
+                selected = 0
+                continue
+            if filtering:
+                if key in ("\b", "\x7f", curses.KEY_BACKSPACE):
+                    query = query[:-1]
+                    selected = 0
+                    continue
+                if isinstance(key,str) and key.isprintable():
+                    query += key
+                    selected = 0
+                    continue
             if key in (curses.KEY_UP, "k"):
-                selected = (selected - 1) % len(options)
-                continue
-            if key in (curses.KEY_DOWN, "j"):
-                selected = (selected + 1) % len(options)
-                continue
-            if key in ("\n", "\r") or key == curses.KEY_ENTER:
-                return options[selected].value
-            if key == curses.KEY_MOUSE:
+                selected = (selected-1) % len(visible)
+            elif key in (curses.KEY_DOWN, "j", "\t"):
+                selected = (selected+1) % len(visible)
+            elif key == curses.KEY_HOME:
+                selected = 0
+            elif key == curses.KEY_END:
+                selected = len(visible)-1
+            elif key == curses.KEY_NPAGE:
+                selected = min(len(visible)-1, selected+max(1,height-10))
+            elif key == curses.KEY_PPAGE:
+                selected = max(0,selected-max(1,height-10))
+            elif key in ("\n", "\r", curses.KEY_ENTER):
+                if visible[selected].value != "__empty":
+                    return visible[selected].value
+            elif key == curses.KEY_MOUSE:
                 try:
-                    _, mouse_x, mouse_y, _, mouse_state = curses.getmouse()
+                    _,x,y,_,mouse_state = curses.getmouse()
                 except curses.error:
                     continue
-                clicked = self._clicked_value(mouse_y, mouse_x)
-                if clicked is None:
-                    continue
-                for index, option in enumerate(options):
-                    if option.value == clicked:
-                        selected = index
-                        break
-                if self._mouse_activates_selection(mouse_state):
+                clicked = self._clicked_value(y,x)
+                if clicked and clicked != "__empty" and self._mouse_activates_selection(mouse_state):
                     self._flush_pending_input()
                     return clicked
-                continue
-            if allow_escape and key in ("\x1b", "q", "Q"):
+            elif allow_escape and key in ("\x1b", "q", "Q"):
                 return None
+            elif not filtering and isinstance(key,str):
+                for index,option in enumerate(visible):
+                    if key.lower() == option.shortcut.lower() and option.shortcut:
+                        return option.value
+                    if key.isdigit() and int(key) == index+1:
+                        return option.value
 
     def _input_text(
         self,
@@ -5415,14 +5394,52 @@ class InteractiveDexterCLI:
         return choice == "yes"
 
     def _message(self, title: str, lines: list[str], *, button_label: str = "Back") -> None:
+        from dexter_tui import compose_message
+        if self.screen is None:
+            return
         config, config_error = self._safe_config()
-        self._choose(
-            title,
-            [TuiOption(button_label, "back")],
-            intro=lines,
-            config=config,
-            config_error=config_error,
-        )
+        body = ([config_error, ""] if config_error else []) + list(lines)
+        scroll_top = 0
+        while True:
+            height,width = self.screen.getmaxyx()
+            frame = compose_message(width,height,title=title,lines=body,
+                summary=self._header_summary(config,width),scroll_top=scroll_top,button_label=button_label)
+            scroll_top = frame.scroll_top
+            self.screen.erase()
+            self._click_regions = frame.clicks
+            for span in frame.spans:
+                self._write(span.y,span.x,span.text,
+                    curses.A_BOLD if span.role == "heading" else self._attr(span.role))
+            self.screen.refresh()
+            try:
+                self.screen.timeout(250)
+                key = self.screen.get_wch()
+            except curses.error:
+                continue
+            finally:
+                self.screen.timeout(-1)
+            if key in ("\n","\r",curses.KEY_ENTER,"\x1b","q","Q"):
+                return
+            if key in (curses.KEY_UP,"k"):
+                scroll_top = max(0,scroll_top-1)
+            elif key in (curses.KEY_DOWN,"j"):
+                scroll_top += 1
+            elif key == curses.KEY_PPAGE:
+                scroll_top = max(0,scroll_top-max(1,height-10))
+            elif key == curses.KEY_NPAGE:
+                scroll_top += max(1,height-10)
+            elif key == curses.KEY_HOME:
+                scroll_top = 0
+            elif key == curses.KEY_END:
+                scroll_top = 1_000_000
+            elif key == curses.KEY_MOUSE:
+                try:
+                    _,x,y,_,mouse_state = curses.getmouse()
+                except curses.error:
+                    continue
+                if self._clicked_value(y,x) == "back" and self._mouse_activates_selection(mouse_state):
+                    self._flush_pending_input()
+                    return
 
     def _suspend_for_command(self, argv: list[str], *, prompt: str) -> int:
         if self.screen is None:
@@ -5462,7 +5479,11 @@ class InteractiveDexterCLI:
         if not value:
             return "(unset)"
         if spec.secret:
-            return _render_short_key(value)
+            return "configured (hidden)"
+        if spec.key in {"HTTP_URL", "WS_URL", "HTTP_URLS", "WS_URLS"}:
+            from urllib.parse import urlsplit
+            hosts = [urlsplit(url.strip()).hostname or "invalid URL" for url in value.split(",") if url.strip()]
+            return ", ".join(hosts)
         return value
 
     def _validate_field_value(self, spec: SettingsFieldSpec, raw: str) -> str | None:
@@ -5693,7 +5714,7 @@ class InteractiveDexterCLI:
             choice = self._choose(
                 title,
                 options,
-                intro=["Select a setting to edit. Changes save straight into .env and refresh Dexter immediately."],
+                intro=["Saved directly to Dexter’s .env. Select a row to edit; / finds a setting."],
                 config=self._safe_config()[0],
                 config_error=self._safe_config()[1],
             )
@@ -5701,32 +5722,31 @@ class InteractiveDexterCLI:
                 return
             self._edit_env_field(TUI_SETTINGS_FIELDS[choice])
 
-    def _configure_menu(self) -> None:
+    def _configure_menu(self):
         section_map = dict(TUI_SETTINGS_SECTIONS)
         while True:
-            options = [
-                TuiOption(name, name, f"{len(keys)} editable settings in this section.")
-                for name, keys in TUI_SETTINGS_SECTIONS
-            ]
-            options.extend(
-                [
-                    TuiOption("Run onboarding", "onboarding", "Guide Dexter through any missing or placeholder setup values."),
-                    TuiOption("Back", "back", "Return to the main menu."),
-                ]
-            )
-            choice = self._choose(
-                "Configure Dexter",
-                options,
-                intro=["Dexter's TUI writes back to .env, reloads config, and keeps the terminal session in sync."],
-                config=self._safe_config()[0],
-                config_error=self._safe_config()[1],
-            )
-            if choice in {None, "back"}:
+            options = [TuiOption(name, name, f"{len(keys)} settings. Select a setting to edit its value.")
+                       for name,keys in TUI_SETTINGS_SECTIONS]
+            options.extend([
+                TuiOption("Local database", "database", "Install, prepare or repair Dexter's own PostgreSQL instance."),
+                TuiOption("Reload .env", "reload", "Read changes made in your text editor without restarting Dexter."),
+                TuiOption("Back", "back", "Return to the home screen."),
+            ])
+            choice = self._choose("Settings", options, config=self._safe_config()[0],
+                                  config_error=self._safe_config()[1])
+            if choice in {None,"back"}:
                 return
-            if choice == "onboarding":
-                self._run_onboarding("startup")
-                continue
-            self._edit_settings_section(choice, section_map[choice])
+            if choice == "database":
+                self._suspend_for_command(["database-setup"],prompt="Database setup finished. Press Enter to return.")
+            elif choice == "reload":
+                for key,value in read_env_values().items():
+                    os.environ[key]=value
+                load_config.cache_clear()
+                legacy_settings.reload_and_sync_loaded_modules()
+                self._invalidate_tui_caches()
+                self.status_message = "Configuration reloaded."
+            else:
+                self._edit_settings_section(choice,section_map[choice])
 
     def _show_help(self) -> None:
         config, config_error = self._safe_config()
@@ -5741,7 +5761,7 @@ class InteractiveDexterCLI:
             "Use ↑/↓ or j/k to move, Enter to select, and the mouse to click menu rows.",
             "",
             "Configuration",
-            "PRIVATE_KEY is the default signer Dexter uses for create, buy, sell, and balance lookup.",
+            "PRIVATE_KEY in Dexter’s .env is the default signer. Configuration stays inside this checkout.",
             "DEXTER_TRADING_PRIVATE_KEY overrides the trading signer when you want a separate key.",
             "DATABASE_URL is Dexter's preferred database setting inside the TUI.",
             "Open positions and recovery history are persisted to the managed positions store in Dexter's state directory.",
@@ -6155,7 +6175,7 @@ class InteractiveDexterCLI:
                         TuiOption("Direct URI", "uri", "Use a ready-made metadata URI."),
                         TuiOption("Image Upload", "image", "Upload a local image and let Pump.fun create the metadata URI."),
                     ],
-                    intro=["Mamba-style rule: direct URI and image upload stay mutually exclusive."],
+                    intro=["Use a metadata URI or upload an image; choose one source."],
                     config=current_config,
                     config_error=current_config_error,
                     default_value=str(form["metadata_mode"]),
@@ -6381,27 +6401,7 @@ class InteractiveDexterCLI:
 
     def _manage_menu(self) -> None:
         base_config, config_error = self._safe_config()
-        mode_options = ("paper", "simulate", "live", "read_only")
-        mode = self._choose(
-            "Manage Runtime Mode",
-            [TuiOption(item, item) for item in mode_options],
-            intro=["Choose the mode Dexter should use when managing tracked positions."],
-            config=base_config,
-            config_error=config_error,
-            default_value="paper" if base_config is None or base_config.runtime.mode == "read_only" else base_config.runtime.mode,
-        )
-        if mode is None:
-            return
-        network = self._choose(
-            "Manage Network",
-            [TuiOption(item, item) for item in ("devnet", "mainnet")],
-            intro=["Choose which network's tracked positions you want to inspect or liquidate."],
-            config=base_config,
-            config_error=config_error,
-            default_value=base_config.runtime.network if base_config is not None else "devnet",
-        )
-        if network is None:
-            return
+        mode, network = self._resolved_defaults()
         while True:
             config, manage_error = self._safe_config(mode=mode, network=network)
             if config is None:
@@ -6418,23 +6418,23 @@ class InteractiveDexterCLI:
                 if item.get("network") in (None, config.runtime.network)
             ]
             options: list[TuiOption] = []
-            for item in open_positions[:12]:
+            for item in open_positions:
                 label, detail = self._manage_position_label(item)
                 options.append(TuiOption(f"Sell {label}", f"sell:{label}", detail))
+            if open_positions:
+                options.append(TuiOption("Sell all open positions", "sell_all", "Queue a manual exit for every open tracked position on this network."))
             options.extend(
                 [
-                    TuiOption("Sell all open positions", "sell_all", "Queue a manual exit for every open tracked position on this network."),
                     TuiOption("Show closed history", "closed", "Review the most recent closed positions."),
+                    TuiOption("Change mode or network", "scope", "Inspect or manage positions using another network or execution mode."),
                     TuiOption("Refresh", "refresh", "Reload the recovery store and redraw this screen."),
                     TuiOption("Back", "back", "Return to the main menu."),
                 ]
             )
-            intro = [
-                f"Open positions: {len(open_positions)}",
-                "Select an open position with > or click it to sell. The numbered text prompt is gone.",
-            ]
+            intro = [f"{len(open_positions)} open positions. Select a position to review its exit."] if open_positions else [
+                "No open positions. Start Dexter or attach a position from Create token."]
             choice = self._choose(
-                "Manage Positions",
+                "Positions",
                 options,
                 intro=intro,
                 config=config,
@@ -6444,6 +6444,16 @@ class InteractiveDexterCLI:
             if choice in {None, "back"}:
                 return
             if choice == "refresh":
+                continue
+            if choice == "scope":
+                chosen_mode = self._choose("Position mode", [TuiOption(item,item) for item in
+                    ("paper","simulate","live","read_only")], config=config, default_value=mode)
+                if chosen_mode is None:
+                    continue
+                chosen_network = self._choose("Position network", [TuiOption(item,item) for item in
+                    ("mainnet","devnet")], config=config, default_value=network)
+                if chosen_network is not None:
+                    mode,network = chosen_mode,chosen_network
                 continue
             if choice == "closed":
                 self._show_closed_history(config, closed_positions)
@@ -6479,80 +6489,52 @@ class InteractiveDexterCLI:
                 self._suspend_for_command(argv, prompt="Manage command finished with exit code {exit_code}. Press Enter to return to Dexter...")
 
     def _startup_prompt(self) -> bool:
-        mode, network = self._resolved_defaults()
-        fields = onboarding_fields_for_intent("startup", mode=mode, network=network, env_values=read_env_values())
-        if not fields:
-            return True
-        choice = self._choose(
-            "Welcome To Dexter",
-            [
-                TuiOption("Start onboarding", "onboarding", "Dexter will ask for the missing or placeholder setup values now."),
-                TuiOption("Open the main menu", "menu", "Skip onboarding for now and go straight into the TUI."),
-                TuiOption("Exit", "exit", "Close Dexter."),
-            ],
-            intro=["Dexter noticed that some core setup values still need attention, like wallet or database settings."],
-            config=self._safe_config()[0],
-            config_error=self._safe_config()[1],
-            allow_escape=False,
-        )
-        if choice == "exit":
-            return False
-        if choice == "onboarding":
-            return bool(self._run_onboarding("startup", field_keys=fields, mode=mode, network=network))
+        # Incomplete configuration is a visible home-screen state, not a modal.
         return True
 
+    def _start_current(self):
+        config,error = self._safe_config()
+        if config is None:
+            self._message("Finish setup", [error or "Open Quick setup to configure Dexter."])
+            return
+        if resolve_trade_execution_mode(config) in {"simulate","live"} and not config.rpc.private_key:
+            self._edit_env_field(TUI_SETTINGS_FIELDS["PRIVATE_KEY"], required=True)
+            config,error = self._safe_config()
+            if config is None or not config.rpc.private_key:
+                return
+        self._suspend_for_command(["run","--target","trade","--mode",config.runtime.mode,
+                                   "--network",config.runtime.network], prompt="Dexter stopped. Press Enter to return home.")
+
     def _main_loop(self) -> int:
-        if not self._startup_prompt():
-            return 0
         while True:
-            config, config_error = self._safe_config()
-            startup_fields = onboarding_fields_for_intent(
-                "startup",
-                mode=self._resolved_defaults()[0],
-                network=self._resolved_defaults()[1],
-                env_values=read_env_values(),
-            )
-            intro = ["Arrow keys and mouse clicks now drive Dexter's menu"]
-            if startup_fields:
-                intro.append("Setup is still incomplete. Open onboarding or configuration any time from here.")
-            options = []
-            if startup_fields:
-                options.append(TuiOption("Onboarding", "onboarding", "Ask Dexter for the missing setup it still needs."))
-            options.extend(
-                [
-                    TuiOption("Run", "run", "Launch trader, collector, or analyzer through Dexter's guided runtime flow."),
-                    TuiOption("Create", "create", "Launch a new token or seed an existing position into Dexter."),
-                    TuiOption("Manage", "manage", "Inspect and liquidate tracked positions from the recovery store."),
-                    TuiOption("Configure", "configure", "Edit .env-backed settings from inside the TUI."),
-                    TuiOption("Help", "help", "Review modes, controls, and key runtime knobs."),
-                    TuiOption("Exit", "exit", "Close Dexter."),
-                ]
-            )
-            choice = self._choose(
-                "Main Menu",
-                options,
-                intro=intro,
-                config=config,
-                config_error=config_error,
-            )
-            if choice in {None, "exit"}:
+            config,error = self._safe_config()
+            options = [
+                TuiOption("Start Dexter", "start", "Run the trader with the saved network, mode and strategy.", "s"),
+                TuiOption("Positions", "manage", "Inspect open positions, recover pending orders and manage exits.", "p"),
+                TuiOption("Create token", "create", "Build or launch a Pump.fun token, or attach an existing position.", "c"),
+                TuiOption("Market data & tasks", "run", "Run the collector, analyze creators, or choose another runtime mode.", "d"),
+                TuiOption("Settings", "configure", "Quick setup first. Strategy, fees and advanced options stay one level deeper.", "e"),
+                TuiOption("Check setup", "doctor", "Check the wallet, RPCs, local database and writable paths.", "t"),
+                TuiOption("Help", "help", "Keyboard shortcuts, execution modes and recovery guidance.", "h"),
+                TuiOption("Quit", "exit", "Close the terminal app. Saved positions remain in the recovery store.", "q"),
+            ]
+            choice = self._choose("Home", options, config=config, config_error=error)
+            if choice in {None,"exit"}:
                 return 0
-            if choice == "onboarding":
-                self._run_onboarding("startup")
-                continue
-            if choice == "run":
-                self._run_menu()
-                continue
-            if choice == "create":
-                self._create_menu()
-                continue
-            if choice == "manage":
+            if choice == "start":
+                self._start_current()
+            elif choice == "manage":
                 self._manage_menu()
-                continue
-            if choice == "configure":
+            elif choice == "create":
+                self._create_menu()
+            elif choice == "run":
+                self._run_menu()
+            elif choice == "configure":
                 self._configure_menu()
-                continue
-            self._show_help()
+            elif choice == "doctor":
+                self._suspend_for_command(["setup"], prompt="Setup check finished. Press Enter to return home.")
+            else:
+                self._show_help()
 
     def run(self) -> int:
         tui_ready, tui_message = _tui_available()
@@ -6577,6 +6559,16 @@ class InteractiveDexterCLI:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
+    if args and args[0] in {"setup", "--diagnostics"}:
+        import dexter_setup
+        return dexter_setup.main(["--diagnostics", *args[1:]] if args[0] == "--diagnostics" else args[1:])
+    if not args:
+        action = os.getenv("DEXTER_START_ACTION", "menu").strip().lower()
+        if action in {"trade", "collector", "analyze"}:
+            args = ["run", "--target", "trade" if action == "trade" else action]
+        elif action == "doctor":
+            args = ["doctor"]
+
     if args and args[0] == "cli":
         import dexter_cli as dexter_commands
 

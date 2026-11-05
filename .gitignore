@@ -1,16 +1,53 @@
-__pycache__/
-build/
-dist/
-
-/env/
-/dev/
-/.dexter/
+# Private local configuration. Only the public template is versioned.
 .env
+.env.*
+*.env
+*.env.*
+!.env.example
+*.pem
+*.key
 .envenv
-*.egg-info/
-AGENTS.md
-PRD.md
-/.autonomous/db-size-maintenance
 
+# Local runtimes, databases, recovery state and research output.
+/.venv/
+/venv/
+/env/
+/.dexter/
+/dev/
+/logs/
+/backups/
 postgres_backup*
-/solana-dev-kit
+*.log
+*.log.*
+*.dump
+*.backup
+
+# Python, packaging and test caches.
+__pycache__/
+*.py[cod]
+*.egg-info/
+/build/
+/dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local tooling and design review captures.
+AGENTS.md
+!/AGENTS.md
+PRODUCT.md
+DESIGN.md
+PRD.md
+/.autonomous/
+/.impeccable/
+/.agents/
+/.codex/
+/.ai-local/
+/.vscode/
+/.idea/
+/solana-dev-kit/
+.DS_Store
+Thumbs.db

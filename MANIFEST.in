@@ -1,0 +1,11 @@
+include .env.example README.md AGENTS.md llms.txt
+recursive-include bindings *.json *.md *.patch *.whl
+recursive-include scripts *.py *.ps1 *.sh
+recursive-include docs *.md *.svg
+recursive-include tests *.py
+global-exclude PRODUCT.md DESIGN.md PRD.md
+prune .impeccable
+prune .autonomous
+prune .agents
+prune .codex
+prune .ai-local

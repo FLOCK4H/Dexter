@@ -1,0 +1,21 @@
+name: Dexter checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare standalone environment
+        run: python dexter_bootstrap.py
+      - name: Verify standalone binding
+        run: .\.venv\Scripts\python.exe Dexter.py --diagnostics
+      - name: Run offline suite
+        run: .\.venv\Scripts\python.exe -m unittest discover -s tests

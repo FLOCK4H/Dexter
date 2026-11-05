@@ -192,7 +192,8 @@ async def _check_http_rpc(config: AppConfig) -> CheckResult:
     payload = {"jsonrpc": "2.0", "id": 1, "method": "getHealth", "params": []}
     try:
         timeout = aiohttp.ClientTimeout(total=8)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        from dexter_network import create_http_session
+        async with create_http_session(timeout=timeout) as session:
             async with session.post(config.rpc.http_url, json=payload) as response:
                 if response.status != 200:
                     return CheckResult(
@@ -218,8 +219,9 @@ async def _check_ws_rpc(config: AppConfig) -> CheckResult:
         return CheckResult("WebSocket RPC", "fail", f"Missing dependency: {exc.name}")
 
     try:
-        async with websockets.connect(config.rpc.ws_url, ping_interval=None, open_timeout=8, close_timeout=3):
-            return CheckResult("WebSocket RPC", "pass", f"Reachable at {redact_url(config.rpc.ws_url)}.")
+        from dexter_network import rpc_websocket
+        async with rpc_websocket(config.rpc.ws_url, ping_interval=None, open_timeout=8, close_timeout=3):
+            return CheckResult("WebSocket RPC", "pass", "A configured WebSocket RPC is reachable.")
     except Exception as exc:
         return CheckResult("WebSocket RPC", "fail", f"WebSocket reachability failed: {exc}")
 
@@ -325,6 +327,12 @@ def run_trader(args: argparse.Namespace) -> int:
 
 
 def run_start(args: argparse.Namespace) -> int:
+    from dexter_setup import prepare_launch
+    try:
+        prepare_launch()
+    except (OSError, RuntimeError) as exc:
+        print('Setup needs attention: '+str(exc))
+        return 1
     config, network_warning = _load_cli_config(args)
     args.network = config.runtime.network
     _render_runtime_summary(
@@ -551,15 +559,17 @@ async def _run_onchain_create(
     execution: str | None = None,
 ) -> dict:
     import aiohttp
-    from solana.rpc.async_api import AsyncClient
+    from dexter_network import RpcPoolClient as AsyncClient
 
-    from DexLab.pump_fun.pump_swap import DEFAULT_PUMP_FUN_IPFS_UPLOAD_URL, PumpFun
+    from dexter_execution import DEFAULT_PUMP_FUN_IPFS_UPLOAD_URL, NativeTokenLauncher
 
     timeout = aiohttp.ClientTimeout(total=60)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    from dexter_network import create_http_session
+    async with create_http_session(timeout=timeout) as session:
         async_client = AsyncClient(config.rpc.http_url)
         try:
-            builder = PumpFun(session, config.rpc.private_key, async_client)
+            builder = NativeTokenLauncher(session, config.rpc.private_key, async_client,
+                allow_live_send=resolve_trade_execution_mode(config) == "live")
             if execution is None:
                 if getattr(args, "dry_run", False):
                     execution = "build"
@@ -1129,7 +1139,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--hide-name", action="store_true", help="On-chain mode: request showName=false in the Pump.fun IPFS upload.")
     create.add_argument("--ipfs-upload-url", help="On-chain mode: override the Pump.fun IPFS upload endpoint used with --image.")
     create.add_argument("--buy-sol", type=float, help="On-chain mode: bundled auto-buy amount in SOL.")
-    create.add_argument("--slippage-pct", type=float, default=15.0, help="On-chain mode: bundled auto-buy slippage percent. Matches Mamba's 15%% default.")
+    create.add_argument("--slippage-pct", type=float, default=15.0, help="On-chain mode: bundled auto-buy slippage percent. Default: 15%%.")
     create.add_argument("--priority-micro-lamports", type=int, default=0, help="On-chain mode: optional compute-unit price for the create transaction.")
     create.add_argument("--simulate-tx", action="store_true", help="On-chain mode: force simulation even when --mode live would otherwise send.")
     create.add_argument("--no-follow", action="store_true", help="On-chain live mode: create/send without launching Dexter afterwards.")
@@ -1249,6 +1259,10 @@ def build_parser() -> argparse.ArgumentParser:
     database_setup.add_argument("--skip-install", action="store_true", help="Do not run WinGet; assume PostgreSQL binaries are already installed locally.")
     database_setup.add_argument("--dry-run", action="store_true", help="Print the intended install/setup actions without changing the machine.")
     database_setup.set_defaults(handler=run_database_setup)
+
+    setup = subparsers.add_parser("setup", help="Prepare the local database and check this Dexter checkout.")
+    from dexter_setup import run_setup
+    setup.set_defaults(handler=lambda args: run_setup())
 
     database_init = subparsers.add_parser("database-init", help="Create or repair Dexter's database roles, tables, and schema after PostgreSQL exists.")
     database_init.add_argument("--network", choices=["devnet", "mainnet"], help="Override DEXTER_NETWORK for this command.")

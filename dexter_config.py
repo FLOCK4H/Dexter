@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 import logging
@@ -26,29 +26,24 @@ NetworkName = Literal["mainnet", "devnet"]
 CODE_ROOT = Path(__file__).resolve().parent
 
 
-def _looks_like_workspace(path: Path) -> bool:
-    return (
-        path.is_dir()
-        and (path / ".env.example").exists()
-        and ((path / "Dexter.py").exists() or (path / "pyproject.toml").exists())
-    )
-
-
 def _resolve_project_root() -> Path:
     override = os.getenv("DEXTER_HOME") or os.getenv("DEXTER_PROJECT_ROOT")
     if override:
         return Path(override).expanduser().resolve()
 
-    cwd = Path.cwd()
-    if _looks_like_workspace(cwd):
-        return cwd.resolve()
-
     return CODE_ROOT
 
 
 PROJECT_ROOT = _resolve_project_root()
+
+
+def _project_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
 ENV_PATH = PROJECT_ROOT / ".env"
-DEFAULT_BACKUP_DIR = PROJECT_ROOT.parent / "dexter_backups"
+DEFAULT_BACKUP_DIR = PROJECT_ROOT / ".dexter" / "backups"
 VALID_RUNTIME_MODES = {"read_only", "paper", "simulate", "live"}
 VALID_NETWORKS = {"mainnet", "devnet"}
 DATASTORE_ENV_ALIASES = {
@@ -82,7 +77,7 @@ class RuntimeConfig:
 class RpcConfig:
     http_url: str
     ws_url: str
-    private_key: str
+    private_key: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -159,8 +154,8 @@ class WalletConfig:
     # trading_private_key is the signer Dexter uses for create/buy/sell.
     # hot_private_key and treasury_address are currently informational labels for
     # runtime snapshots and future operator flows.
-    trading_private_key: str
-    hot_private_key: str
+    trading_private_key: str = field(repr=False)
+    hot_private_key: str = field(repr=False)
     treasury_address: str
 
 
@@ -375,8 +370,8 @@ def _rpc_urls_for_network(network: NetworkName) -> tuple[str, str]:
     if network == "devnet":
         return DEVNET_RPC_ENDPOINTS
     return (
-        _env("HTTP_URL", DEFAULT_MAINNET_RPC_ENDPOINTS[0]),
-        _env("WS_URL", DEFAULT_MAINNET_RPC_ENDPOINTS[1]),
+        _env("HTTP_URL") or _env("HTTP_URLS").split(",")[0].strip() or DEFAULT_MAINNET_RPC_ENDPOINTS[0],
+        _env("WS_URL") or _env("WS_URLS").split(",")[0].strip() or DEFAULT_MAINNET_RPC_ENDPOINTS[1],
     )
 
 
@@ -428,15 +423,15 @@ def load_config(mode_override: str | None = None, network_override: str | None =
     db_host, db_port, db_name, db_user, db_password = _parse_dsn(database_url)
     admin_host, admin_port, admin_name, admin_user, admin_password = _parse_dsn(admin_dsn)
 
-    log_dir = Path(_env("DEXTER_LOG_DIR", str(PROJECT_ROOT / "dev" / "logs"))).expanduser()
-    results_file = Path(_env("DEXTER_RESULTS_FILE", str(PROJECT_ROOT / "dev" / "results.txt"))).expanduser()
-    leaderboard_file = Path(
+    log_dir = _project_path(_env("DEXTER_LOG_DIR", str(PROJECT_ROOT / "dev" / "logs")))
+    results_file = _project_path(_env("DEXTER_RESULTS_FILE", str(PROJECT_ROOT / "dev" / "results.txt")))
+    leaderboard_file = _project_path(
         _env("DEXTER_LEADERBOARD_FILE", str(PROJECT_ROOT / "dev" / "leaderboard.txt"))
-    ).expanduser()
-    state_dir = Path(_env("DEXTER_STATE_DIR", str(PROJECT_ROOT / "dev" / "state"))).expanduser()
-    trader_snapshot_file = Path(_env("DEXTER_TRADER_SNAPSHOT_FILE", str(state_dir / "trader-runtime.json"))).expanduser()
-    collector_snapshot_file = Path(_env("DEXTER_COLLECTOR_SNAPSHOT_FILE", str(state_dir / "collector-runtime.json"))).expanduser()
-    operator_control_file = Path(_env("DEXTER_OPERATOR_CONTROL_FILE", str(state_dir / "operator-control.json"))).expanduser()
+    )
+    state_dir = _project_path(_env("DEXTER_STATE_DIR", str(PROJECT_ROOT / "dev" / "state")))
+    trader_snapshot_file = _project_path(_env("DEXTER_TRADER_SNAPSHOT_FILE", str(state_dir / "trader-runtime.json")))
+    collector_snapshot_file = _project_path(_env("DEXTER_COLLECTOR_SNAPSHOT_FILE", str(state_dir / "collector-runtime.json")))
+    operator_control_file = _project_path(_env("DEXTER_OPERATOR_CONTROL_FILE", str(state_dir / "operator-control.json")))
 
     config = AppConfig(
         project_root=PROJECT_ROOT,
@@ -445,9 +440,9 @@ def load_config(mode_override: str | None = None, network_override: str | None =
             network=network,
             allow_mainnet_live=_env_bool("DEXTER_ALLOW_MAINNET_LIVE", False),
             mainnet_dry_run=_env_bool("DEXTER_MAINNET_DRY_RUN", True),
-            emergency_stop_file=Path(
+            emergency_stop_file=_project_path(
                 _env("DEXTER_EMERGENCY_STOP_FILE", str(PROJECT_ROOT / "dev" / "EMERGENCY_STOP"))
-            ).expanduser(),
+            ),
             close_positions_on_shutdown=_env_bool("DEXTER_CLOSE_POSITIONS_ON_SHUTDOWN", False),
             enable_wslogs=_env_bool("DEXTER_ENABLE_WSLOGS", True),
         ),
@@ -485,7 +480,7 @@ def load_config(mode_override: str | None = None, network_override: str | None =
         ),
         backup=BackupConfig(
             enabled=_env_bool("DEXTER_BACKUP_ENABLED", True),
-            directory=Path(_env("DEXTER_BACKUP_DIR", str(DEFAULT_BACKUP_DIR))).expanduser(),
+            directory=_project_path(_env("DEXTER_BACKUP_DIR", str(DEFAULT_BACKUP_DIR))),
             interval_seconds=_env_int("DEXTER_BACKUP_INTERVAL_SECONDS", 3600),
             retention_count=_env_int("DEXTER_BACKUP_RETENTION_COUNT", 24),
             pg_dump_path=_env("DEXTER_PG_DUMP_PATH", "pg_dump"),
@@ -493,9 +488,9 @@ def load_config(mode_override: str | None = None, network_override: str | None =
         phase2=DataStoreConfig(
             enabled=_env_bool("DEXTER_DATASTORE_ENABLED", True),
             raw_event_retention_days=_env_int("DEXTER_DATASTORE_RAW_EVENT_RETENTION_DAYS", 30),
-            export_dir=Path(
+            export_dir=_project_path(
                 _env("DEXTER_DATASTORE_EXPORT_DIR", str(PROJECT_ROOT / "dev" / "exports"))
-            ).expanduser(),
+            ),
             mint_snapshot_interval_seconds=_env_int("DEXTER_DATASTORE_MINT_SNAPSHOT_INTERVAL_SECONDS", 15),
             mint_snapshot_retention_per_mint=_env_int("DEXTER_DATASTORE_MINT_SNAPSHOT_RETENTION_PER_MINT", 4),
             maintenance_interval_seconds=_env_int("DEXTER_DATASTORE_MAINTENANCE_INTERVAL_SECONDS", 60),
@@ -625,8 +620,9 @@ def validate_config(config: AppConfig, component: Component) -> tuple[list[str],
             errors.append("DEXTER_BACKUP_INTERVAL_SECONDS must be at least 60.")
         if config.backup.retention_count < 1:
             errors.append("DEXTER_BACKUP_RETENTION_COUNT must be at least 1.")
-        if _path_is_within(config.backup.directory, config.project_root):
-            errors.append("DEXTER_BACKUP_DIR must be outside the repository root.")
+        if (_path_is_within(config.backup.directory, config.project_root)
+                and not _path_is_within(config.backup.directory, config.project_root / ".dexter")):
+            errors.append("DEXTER_BACKUP_DIR must be under ignored .dexter/ or outside the repository root.")
 
     if config.phase2.enabled and config.phase2.raw_event_retention_days < 1:
         errors.append("DEXTER_DATASTORE_RAW_EVENT_RETENTION_DAYS must be at least 1.")

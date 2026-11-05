@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/FLOCK4H/Mamba.git",
+  "commit": "1b3216c832f8df362f0097eff382a6bc67a26532",
+  "patch": "source.patch",
+  "patch_sha256": "09182ec256ad5ea3507d57d51680eeb1e92fef9bf2aa9fe8194704758b60514e",
+  "note": "Maintainer-only binding source. Runtime uses the packaged wheel and reads no other checkout."
+}

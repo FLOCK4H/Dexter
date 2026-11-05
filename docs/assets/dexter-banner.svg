@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 280" role="img" aria-labelledby="title desc">
+  <title id="title">Dexter — a standalone Solana trading terminal</title>
+  <desc id="desc">The Dexter wordmark beside a route from Pump.fun to PumpSwap. Launch with python Dexter.py.</desc>
+  <style>
+    text { font-family: Consolas, "Liberation Mono", monospace; }
+    .flow { animation: route 4s linear infinite; }
+    @keyframes route { to { stroke-dashoffset: -360; } }
+    @media (prefers-reduced-motion: reduce) { .flow { animation: none; } }
+  </style>
+  <rect width="1080" height="280" rx="12" fill="#10171d"/>
+  <text x="40" y="111" font-size="84" font-weight="700" fill="#66d9e8" letter-spacing="-3">DEXTER</text>
+  <text x="43" y="153" font-size="20" fill="#ebf0f4">Your wallet. Your terminal.</text>
+  <text x="43" y="185" font-size="16" fill="#adbac7">Trade · create · track · recover</text>
+  <g fill="none" stroke-width="2">
+    <path d="M738 78h232v88H738" stroke="#35434d"/>
+    <path class="flow" d="M738 78h232v88H738" stroke="#66d9e8" stroke-dasharray="28 332"/>
+    <path d="m750 158-12 8 12 8" stroke="#66d9e8"/>
+  </g>
+  <text x="720" y="66" font-size="22" font-weight="700" fill="#ebf0f4">PUMP.FUN</text>
+  <text x="720" y="201" font-size="22" font-weight="700" fill="#66d9e8">PUMPSWAP</text>
+  <text x="720" y="229" font-size="13" fill="#adbac7">Migration-aware routing</text>
+  <path d="M40 225h552" stroke="#35434d"/>
+  <text x="43" y="255" font-size="19" fill="#adbac7">$ <tspan fill="#ebf0f4">python Dexter.py</tspan></text>
+</svg>

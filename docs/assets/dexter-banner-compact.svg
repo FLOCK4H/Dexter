@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 220" role="img" aria-labelledby="title desc">
+  <title id="title">Dexter — your wallet, your terminal</title>
+  <desc id="desc">Standalone Solana terminal with Pump.fun and PumpSwap migration-aware routing.</desc>
+  <rect width="520" height="220" rx="12" fill="#10171d"/>
+  <g font-family="Consolas, Liberation Mono, monospace">
+    <text x="28" y="95" font-size="74" font-weight="700" letter-spacing="-3" fill="#66d9e8">DEXTER</text>
+    <text x="30" y="130" font-size="20" fill="#ebf0f4">Your wallet. Your terminal.</text>
+    <path d="M30 154h460" stroke="#35434d"/>
+    <text x="30" y="188" font-size="20" fill="#adbac7">PUMP.FUN <tspan fill="#66d9e8">→ PUMPSWAP</tspan></text>
+  </g>
+</svg>

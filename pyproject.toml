@@ -4,27 +4,35 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dexter"
-version = "0.0.0"
-description = "Dexter runtime tooling"
+version = "3.1.0"
+description = "Dexter standalone Solana trading terminal"
+readme = "README.md"
+keywords = ["solana", "trading", "pump-fun", "pumpswap", "terminal", "python", "rust"]
 requires-python = ">=3.10"
 dependencies = [
     "aiohttp",
     "asyncpg",
     "base58",
-    "borsh_construct",
-    "construct",
+    "certifi",
     "httpx",
     "python-dotenv",
     "readchar",
     "requests",
-    "solana",
-    "solders",
-    "websockets",
+    "solana>=0.36.6,<0.37",
+    "solders>=0.26,<0.27",
+    "websockets>=13,<16",
     "windows-curses; platform_system == 'Windows'",
 ]
 
+[project.urls]
+Homepage = "https://github.com/FLOCK4H/Dexter"
+Repository = "https://github.com/FLOCK4H/Dexter"
+Documentation = "https://github.com/FLOCK4H/Dexter/blob/main/README.md"
+Issues = "https://github.com/FLOCK4H/Dexter/issues"
+
 [project.scripts]
-dexter = "Dexter:main"
+dexter = "dexter_bootstrap:launch"
+dexter-smoke = "dexter_smoke:main"
 
 [tool.setuptools]
 py-modules = [
@@ -38,6 +46,13 @@ py-modules = [
     "dexter_local_postgres",
     "dexter_logging",
     "dexter_mev",
+    "dexter_mamba",
+    "dexter_execution",
+    "dexter_bootstrap",
+    "dexter_setup",
+    "dexter_tui",
+    "dexter_smoke",
+    "dexter_network",
     "dexter_migration_harness",
     "dexter_operator",
     "dexter_phase2",
